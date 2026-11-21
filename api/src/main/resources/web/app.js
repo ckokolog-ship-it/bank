@@ -161,23 +161,58 @@ $('logout').addEventListener('click', () => logout(false));
 
 // ---------------------------------------------------------------------------------------------
 // the pages
-const PAGES = [
-  ['customers', 'Πελάτες', 'TELLER'], ['accounts', 'Λογαριασμοί', 'TELLER'], ['move', 'Κίνηση', 'TELLER'],
-  ['rules', 'Κανόνες', 'TELLER'], ['products', 'Προϊόντα', 'TELLER'], ['day', 'Ημέρα', 'TELLER'],
-  ['users', 'Χρήστες', 'ADMIN']];
+// the menu: an accordion of groups, one open at a time (the group of the page open by itself)
+const MENU = [
+  { key: 'customers', title: '👥 Πελάτες', items: [['customers', 'Αναζήτηση'], ['customers/new', 'Νέος πελάτης']] },
+  { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['move', 'Νέα κίνηση']] },
+  { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'], ['day', 'Ημέρα και κλείσιμο']] },
+  { key: 'admin', title: '🔐 Διαχείριση', role: 'ADMIN', items: [['users', 'Χρήστες']] }];
+// the item of the menu of a page (a customer: of the customers, an account or an entry: of the accounts)
+const MENU_OF = { customer: 'customers', account: 'accounts', entry: 'accounts' };
 
 function nav() {
   const n = $('nav');
-  n.replaceChildren(...PAGES.filter((p) => can(p[2])).map((p) => h('a', { href: '#/' + p[0], 'data-page': p[0] }, p[1])));
+  n.replaceChildren(...MENU.filter((g) => !g.role || can(g.role)).map((g) => {
+    const d = h('details', { class: 'grp', 'data-key': g.key }, h('summary', null, g.title),
+      h('div', { class: 'grp-items' }, g.items.map(([href, text]) => h('a', { href: '#/' + href, 'data-page': href }, text))));
+    d.addEventListener('toggle', () => {
+      if (!d.open) return;
+      for (const o of n.querySelectorAll('details.grp')) if (o !== d) o.open = false;
+    });
+    return d;
+  }));
 }
+
+function menu(open) {
+  $('side').classList.toggle('open', open);
+  $('scrim').classList.toggle('open', open);
+  $('menu-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function markMenu(page, id) {
+  const here = page === 'customers' && id === 'new' ? 'customers/new' : (MENU_OF[page] || page);
+  for (const g of document.querySelectorAll('#nav details.grp')) {
+    let on = false;
+    for (const a of g.querySelectorAll('a')) {
+      a.classList.toggle('on', a.dataset.page === here);
+      on = on || a.dataset.page === here;
+    }
+    g.classList.toggle('has-on', on);
+    if (on) g.open = true;
+  }
+}
+
+document.body.append(h('div', { id: 'scrim', class: 'scrim', onclick: () => menu(false) }));
+$('menu-btn').addEventListener('click', () => menu(!$('side').classList.contains('open')));
+$('nav').addEventListener('click', (ev) => { if (ev.target.closest('a')) menu(false); });
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') menu(false); });
 
 window.addEventListener('hashchange', route);
 
 async function route() {
   if (!S.me) return;
   const [page, id, extra] = (location.hash.replace(/^#\/?/, '') || 'customers').split('/');
-  const navOn = { customer: 'customers', account: 'accounts', entry: 'accounts' }[page] || page;
-  for (const a of document.querySelectorAll('nav a')) a.classList.toggle('on', a.dataset.page === navOn);
+  markMenu(page, id);
   const m = $('main');
   m.replaceChildren(h('p', { class: 'muted' }, 'Φόρτωση…'));
   try {
@@ -190,7 +225,7 @@ async function route() {
 }
 
 // ---- the customers
-async function customers() {
+async function customers(id) {
   const box = h('div');
   const q = h('input', { placeholder: 'Όνομα, ΑΦΜ, κωδικός, τηλέφωνο', type: 'search' });
   const list = h('div');
@@ -208,7 +243,8 @@ async function customers() {
   box.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', null, 'Πελάτες'), q,
     h('button', { class: 'primary', onclick: () => newCustomer(box) }, 'Νέος πελάτης')), list));
   await load();
-  setTimeout(() => q.focus(), 0);
+  if (id === 'new') newCustomer(box);
+  else setTimeout(() => q.focus(), 0);
   return box;
 }
 
