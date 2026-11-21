@@ -90,6 +90,10 @@ def db():
     d.proc('set_rate', p1, datetime.date(2020, 1, 1), 0, 3)
     d.proc('set_rate', p1, datetime.date(2020, 1, 1), 10000, 4)
     d.proc('set_rate', p2, datetime.date(2020, 1, 1), 0, 0)
+    # the rules of the movements of the bank (of the demo) not on them: everything allowed, no fees
+    for code in ('TS1', 'TC1'):
+        for op in ('DEP', 'WDR', 'TRO', 'TRI', 'OUT', 'INC'):
+            d.cur.callfunc('bk_core.set_rule', int, [code, None, op, '*'], {'p_allowed': 'Y', 'p_fee': 0})
     conn.commit()
     yield d
     conn.rollback()

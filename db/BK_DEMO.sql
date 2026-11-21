@@ -2,7 +2,11 @@
 -- (their AFM with a right check digit, belonging to nobody we know), their accounts (some joint, some with an
 -- overdraft), and a year of movements, day by day: salaries, rents, withdrawals, card payments, transfers,
 -- transfers to other banks, a few reversals; every day closed (the interest of each day; capitalized at the
--- end of each period, with its tax). A rate of the savings changed in the middle of the year. Run by
+-- end of each period, with its tax). A rate of the savings changed in the middle of the year. The rules of the
+-- movements: no deposit or withdrawal from the e-banking, the ATM up to 600 € a day, a fee for a transfer to
+-- another bank at the counter and for the 4th withdrawal of the month at the counter on, the savings without
+-- transfers to another bank and up to 4 withdrawals a month, the savings plus with 100 € left in them always,
+-- a lower ATM limit for a few accounts; a movement out of its rules is not done. Run by
 -- INSTALL.sql demo; once: a database with entries already is left as it is.
 set serveroutput on
 declare
@@ -72,6 +76,14 @@ declare
   begin
     return round(dbms_random.value(p_from, p_to), 2);
   end;
+
+  -- a movement out of the rules of its account (or without the money for its fee): not done
+  procedure refused is
+  begin
+    if sqlcode not between -20132 and -20118 then
+      raise_application_error(-20000, sqlerrm);
+    end if;
+  end;
 begin
   select count(*) into n from bk_entry;
   if n > 0 then
@@ -124,6 +136,22 @@ begin
     bk_core.add_holder(acc(j * 3), cust(41 - j));
   end loop;
 
+  -- the rules of the movements: of the bank, of the products, of a few accounts
+  n := bk_core.set_rule(null, null, 'DEP', 'WEB', p_allowed => 'N');
+  n := bk_core.set_rule(null, null, 'WDR', 'WEB', p_allowed => 'N');
+  n := bk_core.set_rule(null, null, 'WDR', 'ATM', p_min_amount => 20, p_max_amount => 600, p_day_amount => 600);
+  n := bk_core.set_rule(null, null, 'WDR', 'BR', p_free_month => 3, p_fee => 1);
+  n := bk_core.set_rule(null, null, 'OUT', 'WEB', p_day_amount => 5000);
+  n := bk_core.set_rule(null, null, 'OUT', 'BR', p_fee => 3);
+  n := bk_core.set_rule('SAV', null, 'OUT', '*', p_allowed => 'N');
+  n := bk_core.set_rule('SAV', null, 'WDR', '*', p_month_count => 4);
+  for x in (select column_value op from table(sys.odcivarchar2list('WDR', 'TRO', 'OUT'))) loop
+    n := bk_core.set_rule('SAVP', null, x.op, '*', p_min_balance => 100);
+  end loop;
+  for j in 1 .. 3 loop
+    n := bk_core.set_rule(null, acc(j * 11), 'WDR', 'ATM', p_max_amount => 200, p_day_amount => 200);
+  end loop;
+
   -- the first money: every account something in, the savings more
   for j in 1 .. acc.count loop
     select case p.kind when 'SAV' then 1 else 0 end into n
@@ -145,25 +173,43 @@ begin
     for j in 1 .. acc.count loop
       -- the salary, on a day of its own early in the month; the rent a few days later
       if salary(j) > 0 and to_number(to_char(d, 'DD')) = 1 + mod(j, 4) then
-        e := bk_core.transfer_in(acc(j), salary(j), 'GR1601101250000000012300695', 'Μισθοδοσία ' || to_char(d, 'MM/YYYY'));
+        e := bk_core.transfer_in(acc(j), salary(j), 'GR1601101250000000012300695', 'Μισθοδοσία ' || to_char(d, 'MM/YYYY'),
+                                 p_channel => 'WEB');
       end if;
-      if rent(j) > 0 and to_number(to_char(d, 'DD')) = 5 + mod(j, 3) and available(acc(j)) >= rent(j) then
-        e := bk_core.transfer_out(acc(j), rent(j), 'GR1601101250000000012300695', 'Ενοίκιο ' || to_char(d, 'MM/YYYY'));
+      -- the rent from the e-banking, or at the counter now and then (with its fee)
+      if rent(j) > 0 and to_number(to_char(d, 'DD')) = 5 + mod(j, 3) and available(acc(j)) >= rent(j) + 3 then
+        begin
+          e := bk_core.transfer_out(acc(j), rent(j), 'GR1601101250000000012300695', 'Ενοίκιο ' || to_char(d, 'MM/YYYY'),
+                                    p_channel => case when dbms_random.value < 0.2 then 'BR' else 'WEB' end);
+        exception when others then refused;
+        end;
       end if;
-      -- now and then: a withdrawal, a card payment, a deposit, a transfer to another account of the bank
+      -- now and then: a withdrawal (mostly from an ATM), a card payment, a deposit, a transfer to another
+      -- account of the bank
       if dbms_random.value < 0.08 then
         amt := round(dbms_random.value(20, 400) / 10) * 10;
         avail := available(acc(j));
         if avail >= amt then
-          e := bk_core.withdraw(acc(j), amt, 'Ανάληψη ΑΤΜ');
+          begin
+            if dbms_random.value < 0.8 then
+              e := bk_core.withdraw(acc(j), amt, 'Ανάληψη ΑΤΜ', p_channel => 'ATM');
+            else
+              e := bk_core.withdraw(acc(j), amt, 'Ανάληψη', p_channel => 'BR');
+            end if;
+          exception when others then refused;
+          end;
         end if;
       end if;
       if dbms_random.value < 0.12 then
         amt := money(5, 180);
         if available(acc(j)) >= amt then
-          e := bk_core.transfer_out(acc(j), amt, 'GR9608100010000001234567890',
-                                    'Πληρωμή με κάρτα: ' || case trunc(dbms_random.value(0, 5)) when 0 then 'σούπερ μάρκετ'
-                                      when 1 then 'καύσιμα' when 2 then 'φαρμακείο' when 3 then 'εστιατόριο' else 'ηλεκτρονικό κατάστημα' end);
+          begin
+            e := bk_core.transfer_out(acc(j), amt, 'GR9608100010000001234567890',
+                                      'Πληρωμή με κάρτα: ' || case trunc(dbms_random.value(0, 5)) when 0 then 'σούπερ μάρκετ'
+                                        when 1 then 'καύσιμα' when 2 then 'φαρμακείο' when 3 then 'εστιατόριο' else 'ηλεκτρονικό κατάστημα' end,
+                                      p_channel => 'WEB');
+          exception when others then refused;
+          end;
         end if;
       end if;
       if dbms_random.value < 0.03 then
@@ -173,7 +219,10 @@ begin
         b := acc(trunc(dbms_random.value(1, acc.count + 1)));
         amt := money(10, 800);
         if b <> acc(j) and available(acc(j)) >= amt then
-          e := bk_core.transfer(acc(j), b, amt, 'Μεταφορά');
+          begin
+            e := bk_core.transfer(acc(j), b, amt, 'Μεταφορά', p_channel => 'WEB');
+          exception when others then refused;
+          end;
         end if;
       end if;
     end loop;
@@ -181,8 +230,12 @@ begin
     if mod(d - first_day, 61) = 30 then
       a := acc(trunc(dbms_random.value(1, acc.count + 1)));
       if available(a) >= 30 then
-        e := bk_core.transfer_out(a, 29.90, 'GR9608100010000001234567890', 'Πληρωμή με κάρτα: ηλεκτρονικό κατάστημα');
-        n := bk_core.reverse(e, 'Αντιλογισμός: διπλή χρέωση');
+        begin
+          e := bk_core.transfer_out(a, 29.90, 'GR9608100010000001234567890', 'Πληρωμή με κάρτα: ηλεκτρονικό κατάστημα',
+                                    p_channel => 'WEB');
+          n := bk_core.reverse(e, 'Αντιλογισμός: διπλή χρέωση');
+        exception when others then refused;
+        end;
       end if;
     end if;
     bk_core.close_day(d);
