@@ -165,7 +165,8 @@ $('logout').addEventListener('click', () => logout(false));
 const MENU = [
   { key: 'customers', title: '👥 Πελάτες', items: [['customers', 'Αναζήτηση'], ['customers/new', 'Νέος πελάτης']] },
   { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['move', 'Νέα κίνηση']] },
-  { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'], ['day', 'Ημέρα και κλείσιμο']] },
+  { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'], ['atms', 'ATM'],
+    ['day', 'Ημέρα και κλείσιμο']] },
   { key: 'admin', title: '🔐 Διαχείριση', role: 'ADMIN', items: [['users', 'Χρήστες']] }];
 // the item of the menu of a page (a customer: of the customers, an account or an entry: of the accounts)
 const MENU_OF = { customer: 'customers', account: 'accounts', entry: 'accounts' };
@@ -216,7 +217,7 @@ async function route() {
   const m = $('main');
   m.replaceChildren(h('p', { class: 'muted' }, 'Φόρτωση…'));
   try {
-    const f = { customers, customer, accounts, account, move, entry, rules, products, day, users }[page] || customers;
+    const f = { customers, customer, accounts, account, move, entry, rules, products, atms, day, users }[page] || customers;
     const el = await f(id, extra);
     m.replaceChildren(el);
   } catch (e) {
@@ -368,13 +369,13 @@ async function account(id, tab) {
       kv('Επιτόκιο τώρα', num(a.rate_now) + ' %'),
       kv('Τόκοι', a.day_basis + ', κεφαλαιοποίηση ανά ' + CAP[a.cap_every] + ', φόρος ' + num(a.tax_rate) + ' %')),
     actions));
-  const tabs = [['statement', 'Καρτέλα'], ['interest', 'Τόκοι'], ['limits', 'Όρια και κανόνες'], ['holders', 'Δικαιούχοι']];
+  const tabs = [['statement', 'Καρτέλα'], ['interest', 'Τόκοι'], ['limits', 'Όρια και κανόνες'], ['holders', 'Δικαιούχοι'], ['cards', 'Κάρτες']];
   const cur = tab || 'statement';
   box.append(h('div', { class: 'tabs' }, tabs.map(([k, v]) => h('button', { class: k === cur ? 'on' : null,
     onclick: () => { location.hash = '#/account/' + id + '/' + k; } }, v))));
   const body = h('div', { class: 'card' });
   box.append(body);
-  const f = { statement: statementTab, interest: interestTab, limits: limitsTab, holders: holdersTab }[cur] || statementTab;
+  const f = { statement: statementTab, interest: interestTab, limits: limitsTab, holders: holdersTab, cards: cardsTab }[cur] || statementTab;
   body.append(await f(a));
   return box;
 }
@@ -484,6 +485,77 @@ async function holdersTab(a) {
     out.append(h('h3', null, 'Νέος συνδικαιούχος'), q, found);
   }
   return out;
+}
+
+// ---- the cards of an account
+const CARD_STATUS = { A: 'Ενεργή', B: 'Δεσμευμένη', C: 'Ακυρωμένη' };
+const pan = (v) => v ? v.replace(/(.{4})/g, '$1 ').trim() : '';
+
+function pinNotice(c) {
+  return h('div', { class: 'card pin-notice' }, h('h3', null, 'Το PIN της κάρτας ' + pan(c.pan)),
+    h('div', { class: 'pin' }, c.pin),
+    h('p', { class: 'muted' }, 'Δώστε το στον πελάτη τώρα: δεν φαίνεται ξανά (η βάση κρατά μόνο ένα hash του). Ο πελάτης το αλλάζει στο ATM.'));
+}
+
+async function cardsTab(a) {
+  const rows = await api('accounts/' + a.id + '/cards');
+  const out = h('div');
+  const notice = h('div');
+  async function act(path, body, msg) {
+    try {
+      const r = await api(path, body);
+      if (r.pin) { notice.replaceChildren(pinNotice(r)); await reload(); } else { toast(msg); route(); }
+    } catch (e) { toast(e.message, true); }
+  }
+  async function reload() {
+    const fresh = await api('accounts/' + a.id + '/cards');
+    list.replaceChildren(cardTable(fresh));
+  }
+  function cardTable(rs) {
+    return table(['Αριθμός', 'Κάτοχος', 'Λήξη', 'Κατάσταση', 'PIN', ''], rs.map((c) => h('tr', { class: c.status === 'C' ? 'rev' : null },
+      td(pan(c.pan), 'mono'), td(c.holder), td(c.expires.slice(5, 7) + '/' + c.expires.slice(2, 4) + (c.expired === 'Y' ? ' (έληξε)' : '')),
+      td(h('span', { class: 'badge ' + (c.status === 'A' ? 'O' : c.status === 'B' ? 'B' : 'C') }, CARD_STATUS[c.status])),
+      td(c.has_pin === 'N' ? h('span', { class: 'warn' }, 'Χωρίς PIN') : c.pin_locked === 'Y' ? h('span', { class: 'badge no' }, 'Κλειδωμένο')
+        : c.pin_failed > 0 ? c.pin_failed + ' λάθος' : '✔'),
+      td(c.status === 'C' ? '' : h('div', { class: 'actions' },
+        h('button', { onclick: () => { if (confirm('Νέο PIN για την κάρτα ' + pan(c.pan) + ';')) act('cards/' + c.id + '/pin', {}); } },
+          c.has_pin === 'N' ? 'Έκδοση PIN' : 'Νέο PIN'),
+        c.status === 'A' ? h('button', { onclick: () => act('cards/' + c.id + '/status', { status: 'B' }, 'Η κάρτα δεσμεύτηκε') }, 'Δέσμευση') : null,
+        c.status === 'B' && can('MANAGER') ? h('button', { onclick: () => act('cards/' + c.id + '/status', { status: 'A' }, 'Η κάρτα ενεργοποιήθηκε') }, 'Ενεργοποίηση') : null,
+        can('MANAGER') ? h('button', { class: 'danger', onclick: () => {
+          if (confirm('Ακύρωση της κάρτας ' + pan(c.pan) + '; Δεν ξαναενεργοποιείται.')) act('cards/' + c.id + '/status', { status: 'C' }, 'Η κάρτα ακυρώθηκε');
+        } }, 'Ακύρωση') : null)))));
+  }
+  const list = h('div', null, cardTable(rows));
+  out.append(notice, list);
+  if (a.status !== 'C') {
+    out.append(h('h3', null, 'Νέα κάρτα'), form([field('Κάτοχος', sel('customer_id',
+      Object.fromEntries(a.holders.map((c) => [String(c.id), c.name + (c.role === 'P' ? ' (κύριος)' : '')]))))], async (f) => {
+      const r = await api('accounts/' + a.id + '/cards', { customer_id: Number(values(f).customer_id) });
+      notice.replaceChildren(pinNotice(r));
+      await reload();
+    }, 'Έκδοση κάρτας'));
+  }
+  out.append(h('p', { class: 'muted' }, 'Το ATM: ', h('a', { href: '/atm/', target: '_blank', rel: 'noopener' }, '/atm/'),
+    '. Οι αναλήψεις από ATM ακολουθούν τους κανόνες του καναλιού ATM (καρτέλα «Όρια και κανόνες»).'));
+  return out;
+}
+
+// ---- the ATMs
+async function atms() {
+  const rows = await api('atms');
+  const box = h('div', { class: 'card' }, h('h2', null, 'ATM'));
+  box.append(table(['Κωδικός', 'Όνομα', 'Διεύθυνση', '#Μετρητά', 'Κατάσταση', ''], rows.map((m) => h('tr', null,
+    td(m.code, 'mono'), td(m.name), td(m.address), tdn(eur(m.cash)), td(m.active === 'Y' ? 'Σε λειτουργία' : h('span', { class: 'muted' }, 'Εκτός')),
+    td(h('div', { class: 'actions' },
+      h('a', { href: '/atm/?atm=' + m.code, target: '_blank', rel: 'noopener' }, 'Οθόνη ATM'),
+      can('MANAGER') ? h('button', { onclick: async () => {
+        const v = prompt('Μετρητά στο ' + m.code + ' (€, σε δεκάδες· αρνητικό: αφαίρεση)', '10000');
+        if (v == null) return;
+        try { await api('atms/' + m.code + '/cash', { amount: Number(v.replace(',', '.')) }); toast('Έγινε'); route(); } catch (e) { toast(e.message, true); }
+      } }, 'Μετρητά') : null))))));
+  box.append(h('p', { class: 'muted' }, 'Οι αναλήψεις από ATM γίνονται με κάρτα και PIN (λογαριασμός → καρτέλα «Κάρτες»), μέσα στους κανόνες του καναλιού ATM.'));
+  return box;
 }
 
 // ---- a movement

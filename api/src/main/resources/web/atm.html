@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bank ATM</title>
+  <link rel="stylesheet" href="atm.css">
+  <script src="atm.js" defer></script>
+</head>
+<body>
+  <div class="room">
+    <div class="atm" id="atm">
+      <div class="atm-head"><span class="logo">🏦 Bank</span><span id="atm-name" class="atm-name"></span></div>
+      <div class="screen-row">
+        <div class="keys" id="keys-left"></div>
+        <div class="screen" id="screen" aria-live="polite"></div>
+        <div class="keys" id="keys-right"></div>
+      </div>
+      <div class="lower">
+        <div class="pad" id="pad"></div>
+        <div class="slots">
+          <div class="slot card-slot" id="card-slot"><span>ΚΑΡΤΑ</span><i></i></div>
+          <div class="slot receipt-slot"><span>ΑΠΟΔΕΙΞΗ</span><i></i></div>
+          <div class="slot cash-slot" id="cash-slot"><span>ΜΕΤΡΗΤΑ</span><i></i><div class="notes" id="notes"></div></div>
+        </div>
+      </div>
+    </div>
+    <aside class="side">
+      <section class="panel">
+        <h2>Η κάρτα σας</h2>
+        <p class="hint">Γράψτε τον αριθμό της κάρτας (στη σελίδα του λογαριασμού, καρτέλα «Κάρτες») και βάλτε τη στο ATM.</p>
+        <form id="card-form">
+          <input id="pan" inputmode="numeric" autocomplete="off" placeholder="4999 0000 0000 0013" maxlength="23">
+          <button type="submit" id="insert">Εισαγωγή κάρτας</button>
+        </form>
+        <label class="pick">ATM <select id="atm-pick"></select></label>
+      </section>
+      <section class="panel">
+        <h2>Απόδειξη</h2>
+        <pre id="receipt" class="receipt empty">—</pre>
+      </section>
+      <p class="hint">Πληκτρολόγιο: ψηφία, Enter = Εντάξει, Backspace = Διόρθωση, Esc = Ακύρωση.</p>
+    </aside>
+  </div>
+</body>
+</html>

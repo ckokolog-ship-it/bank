@@ -92,6 +92,23 @@ create or replace package bk_core as
   -- the balance of an account by value date at the end of a day
   function value_balance(p_account_id number, p_day date) return number;
 
+  -- the debit cards: of an account and one of its holders (the primary, if none given); its number (PAN, 16
+  -- digits: 4, the bank, the card, a Luhn check digit), till the end of its month 4 years on. Status: A active,
+  -- B blocked (again A by the bank), C cancelled (for good). Its PIN: kept by bk-api (a hash, never itself)
+  function luhn_ok(p_number varchar2) return varchar2;
+  function new_card(p_account_id number, p_customer_id number default null) return number;
+  procedure set_card_status(p_card_id number, p_status varchar2);
+  -- the account of a card that may be used now (active, not expired, its account not closed)
+  function card_account(p_card_id number) return number;
+
+  -- the ATMs: their cash (filled or taken out by the bank); a withdrawal (in tens: notes of 10, 20, 50 €;
+  -- within the cash of the ATM), a deposit, a transfer to an account of the bank, by a card: the channel ATM,
+  -- so within the rules of its account for the ATM. Their entry back
+  procedure atm_cash(p_atm_code varchar2, p_amount number);
+  function atm_withdraw(p_atm_code varchar2, p_card_id number, p_amount number) return number;
+  function atm_deposit(p_atm_code varchar2, p_card_id number, p_amount number) return number;
+  function atm_transfer(p_atm_code varchar2, p_card_id number, p_to_iban varchar2, p_amount number) return number;
+
 end bk_core;
 /
 
@@ -892,6 +909,181 @@ create or replace package body bk_core as
       fail(25, 'Ο λογαριασμός ' || a.iban || ' έχει κινήσεις με μελλοντική ημερομηνία αξίας');
     end if;
     update bk_account set status = 'C', closed_on = d where id = p_account_id;
+  end;
+
+  -- ---------------------------------------------------------------------------------------------
+  -- the cards
+  function luhn_sum(p_number varchar2) return number is
+    s number := 0;
+    d number;
+  begin
+    for i in 1 .. length(p_number) loop
+      d := to_number(substr(p_number, length(p_number) - i + 1, 1));
+      if mod(i, 2) = 0 then
+        d := d * 2;
+        if d > 9 then
+          d := d - 9;
+        end if;
+      end if;
+      s := s + d;
+    end loop;
+    return s;
+  end;
+
+  function luhn_ok(p_number varchar2) return varchar2 is
+  begin
+    if p_number is null or not regexp_like(p_number, '^[0-9]{12,19}$') then
+      return 'N';
+    end if;
+    return case when mod(luhn_sum(p_number), 10) = 0 then 'Y' else 'N' end;
+  end;
+
+  function new_card(p_account_id number, p_customer_id number default null) return number is
+    a bk_account%rowtype := account_row(p_account_id);
+    c number := p_customer_id;
+    n number;
+    v number;
+    body_ varchar2(16);
+  begin
+    if a.status = 'C' then
+      fail(12, 'Ο λογαριασμός ' || a.iban || ' είναι κλειστός');
+    end if;
+    if c is null then
+      select customer_id into c from bk_holder where account_id = p_account_id and role = 'P';
+    end if;
+    select count(*) into n from bk_holder where account_id = p_account_id and customer_id = c;
+    if n = 0 then
+      fail(36, 'Ο πελάτης ' || c || ' δεν είναι δικαιούχος του ' || a.iban);
+    end if;
+    insert into bk_card (pan, account_id, customer_id, expires)
+    values ('T' || substr(rawtohex(sys_guid()), 1, 15), p_account_id, c, last_day(add_months(open_day, 48)))
+    returning id into v;
+    body_ := '4' || lpad(nvl(setting('BANK_CODE'), '999'), 3, '0') || lpad(v, 11, '0');
+    body_ := body_ || to_char(mod(10 - mod(luhn_sum(body_ || '0'), 10), 10));      -- (not in SQL: PLS-00231)
+    update bk_card set pan = body_ where id = v;
+    return v;
+  end;
+
+  function card_row(p_card_id number) return bk_card%rowtype is
+    k bk_card%rowtype;
+  begin
+    select * into k from bk_card where id = p_card_id;
+    return k;
+  exception
+    when no_data_found then
+      fail(33, 'Δεν υπάρχει η κάρτα');
+  end;
+
+  procedure set_card_status(p_card_id number, p_status varchar2) is
+    k bk_card%rowtype := card_row(p_card_id);
+  begin
+    if p_status is null or p_status not in ('A', 'B', 'C') then
+      fail(34, 'Κατάσταση κάρτας: A ενεργή, B δεσμευμένη, C ακυρωμένη');
+    end if;
+    if k.status = 'C' then
+      fail(34, 'Η κάρτα είναι ακυρωμένη: μια νέα κάρτα');
+    end if;
+    update bk_card set status = p_status where id = p_card_id;
+  end;
+
+  function card_account(p_card_id number) return number is
+    k bk_card%rowtype := card_row(p_card_id);
+    a bk_account%rowtype;
+  begin
+    if k.status = 'B' then
+      fail(34, 'Η κάρτα είναι δεσμευμένη: επικοινωνήστε με την τράπεζα');
+    elsif k.status = 'C' then
+      fail(34, 'Η κάρτα είναι ακυρωμένη');
+    end if;
+    if k.expires < open_day then
+      fail(35, 'Η κάρτα έληξε στις ' || to_char(k.expires, 'MM/YY'));
+    end if;
+    a := account_row(k.account_id);
+    if a.status = 'C' then
+      fail(12, 'Ο λογαριασμός της κάρτας είναι κλειστός');
+    end if;
+    return k.account_id;
+  end;
+
+  -- ---------------------------------------------------------------------------------------------
+  -- the ATMs
+  function atm_row(p_atm_code varchar2, p_lock boolean default false) return bk_atm%rowtype is
+    m bk_atm%rowtype;
+  begin
+    if p_lock then
+      select * into m from bk_atm where code = upper(p_atm_code) for update;
+    else
+      select * into m from bk_atm where code = upper(p_atm_code);
+    end if;
+    if m.active <> 'Y' then
+      fail(37, 'Το ATM ' || m.code || ' δεν λειτουργεί');
+    end if;
+    return m;
+  exception
+    when no_data_found then
+      fail(37, 'Δεν υπάρχει ATM ' || p_atm_code);
+  end;
+
+  procedure atm_cash(p_atm_code varchar2, p_amount number) is
+    m bk_atm%rowtype;
+  begin
+    select * into m from bk_atm where code = upper(p_atm_code) for update;
+    if p_amount is null or p_amount = 0 or mod(p_amount, 10) <> 0 then
+      fail(38, 'Τα μετρητά ενός ATM: σε δεκάδες (χαρτονομίσματα των 10, 20, 50 €)');
+    end if;
+    if m.cash + p_amount < 0 then
+      fail(39, 'Το ATM ' || m.code || ' έχει ' || money_text(m.cash));
+    end if;
+    update bk_atm set cash = cash + p_amount where id = m.id;
+  exception
+    when no_data_found then
+      fail(37, 'Δεν υπάρχει ATM ' || p_atm_code);
+  end;
+
+  function atm_withdraw(p_atm_code varchar2, p_card_id number, p_amount number) return number is
+    m bk_atm%rowtype := atm_row(p_atm_code, true);
+    a number := card_account(p_card_id);
+    e number;
+  begin
+    amount_ok(p_amount);
+    if mod(p_amount, 10) <> 0 then
+      fail(38, 'Το ATM δίνει χαρτονομίσματα των 10, 20 και 50 €: ένα ποσό σε δεκάδες');
+    end if;
+    if m.cash < p_amount then
+      fail(39, 'Το ATM δεν έχει αρκετά μετρητά: ως ' || money_text(trunc(m.cash / 10) * 10));
+    end if;
+    e := withdraw(a, p_amount, 'Ανάληψη ATM ' || m.code || ' ' || m.name, null, 'ATM');
+    update bk_atm set cash = cash - p_amount where id = m.id;
+    return e;
+  end;
+
+  function atm_deposit(p_atm_code varchar2, p_card_id number, p_amount number) return number is
+    m bk_atm%rowtype := atm_row(p_atm_code, true);
+    a number := card_account(p_card_id);
+    e number;
+  begin
+    amount_ok(p_amount);
+    if mod(p_amount, 5) <> 0 then
+      fail(38, 'Το ATM δέχεται χαρτονομίσματα: ένα ποσό σε πεντάδες');
+    end if;
+    e := deposit(a, p_amount, 'Κατάθεση ATM ' || m.code || ' ' || m.name, null, 'ATM');
+    update bk_atm set cash = cash + p_amount where id = m.id;
+    return e;
+  end;
+
+  function atm_transfer(p_atm_code varchar2, p_card_id number, p_to_iban varchar2, p_amount number) return number is
+    m bk_atm%rowtype := atm_row(p_atm_code);
+    a number := card_account(p_card_id);
+    t number;
+    iban_ varchar2(40) := replace(upper(p_to_iban), ' ');
+  begin
+    begin
+      select id into t from bk_account where iban = iban_;
+    exception
+      when no_data_found then
+        fail(21, 'Δεν υπάρχει λογαριασμός ' || p_to_iban || ' στην τράπεζα');
+    end;
+    return transfer(a, t, p_amount, 'Μεταφορά από ATM ' || m.code, null, 'ATM');
   end;
 
 end bk_core;

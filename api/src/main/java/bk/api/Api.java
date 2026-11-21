@@ -46,6 +46,11 @@ import java.util.Map;
  *   GET  /api/rules?product=&account_id=         the rules of the moves
  *   POST /api/rules {product, account_id, op, channel, allowed, min_amount, ...}   set (M)
  *   POST /api/rules/{id}/remove                  (M)
+ *   GET  /api/accounts/{id}/cards   POST /api/accounts/{id}/cards {customer_id}   its cards; a new one (its PIN
+ *                                                back, once: for the customer)
+ *   POST /api/cards/{id}/pin                     a new PIN (back, once), unlocked
+ *   POST /api/cards/{id}/status {status A|B|C}   B blocked (anyone); A again, C cancelled (M)
+ *   GET  /api/atms   POST /api/atms/{code}/cash {amount}   the ATMs and their cash; cash in (+) or out (-) (M)
  *   GET  /api/users   POST /api/users {username, full_name, role, password}
  *   POST /api/users/{id} {full_name, role, active, password, unlock}   (ADMIN)
  * </pre>
@@ -205,6 +210,19 @@ final class Api {
             }
             case "rules" -> {
                 return rules(c, u, get, p, q, in);
+            }
+            case "cards" -> {
+                return cards(c, u, get, p, in);
+            }
+            case "atms" -> {
+                if (get && p.length == 1) {
+                    return Db.rows(c, "select code, name, address, cash, active from bk_atm order by code");
+                }
+                if (!get && is(p, "atms", "*", "cash")) {
+                    need(u, "MANAGER");
+                    Db.exec(c, "begin bk_core.atm_cash(?, ?); end;", p[1], Http.decimal(in, "amount", null));
+                    return Db.rows(c, "select code, name, address, cash, active from bk_atm order by code");
+                }
             }
             case "users" -> {
                 need(u, "ADMIN");
@@ -404,6 +422,18 @@ final class Api {
             r.put("rules", rulesOf(c, id));
             return r;
         }
+        if (get && is(p, "accounts", "*", "cards")) {
+            account(c, id);
+            return cardsOf(c, id);
+        }
+        if (!get && is(p, "accounts", "*", "cards")) {
+            long card = Db.fn(c, "bk_core.new_card(?, ?)", id, Http.longValue(in, "customer_id"));
+            String pin = Atm.newPin();
+            Atm.setPin(c, card, pin);
+            Map<String, Object> r = card(c, card);
+            r.put("pin", pin);
+            return r;
+        }
         if (!get && is(p, "accounts", "*", "holders")) {
             Db.exec(c, "begin bk_core.add_holder(?, ?); end;", id, Http.longValue(in, "customer_id"));
             return account(c, id);
@@ -547,6 +577,50 @@ final class Api {
                 + "from bk_line l left join bk_account a on a.id = l.account_id left join bk_gl g on g.code = l.gl_code "
                 + "where l.entry_id = ? order by l.id", id));
         return r;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    private static final String CARD_COLS = "select k.id, k.pan, k.account_id, k.customer_id, c.name holder, k.issued_on, "
+            + "k.expires, k.status, case when k.pin_hash is null then 'N' else 'Y' end has_pin, k.pin_failed, "
+            + "case when k.pin_failed >= " + Atm.PIN_TRIES + " then 'Y' else 'N' end pin_locked, "
+            + "case when k.expires < bk_core.open_day then 'Y' else 'N' end expired "
+            + "from bk_card k join bk_customer c on c.id = k.customer_id";
+
+    private static List<Map<String, Object>> cardsOf(Connection c, long account) throws SQLException {
+        return Db.rows(c, CARD_COLS + " where k.account_id = ? order by decode(k.status, 'C', 1, 0), k.id desc", account);
+    }
+
+    private static Map<String, Object> card(Connection c, long id) throws SQLException {
+        Map<String, Object> r = Db.row(c, CARD_COLS + " where k.id = ?", id);
+        if (r == null) {
+            throw new Http.Fail(404, "not_found", "Δεν υπάρχει κάρτα " + id);
+        }
+        return r;
+    }
+
+    private Object cards(Connection c, Auth.User u, boolean get, String[] p, Map<String, Object> in) throws SQLException {
+        if (!get && is(p, "cards", "*", "pin")) {
+            long id = Http.id(p[1]);
+            Map<String, Object> k = card(c, id);
+            if ("C".equals(k.get("status"))) {
+                throw new Http.Fail(400, "BK-134", "Η κάρτα είναι ακυρωμένη");
+            }
+            String pin = Atm.newPin();
+            Atm.setPin(c, id, pin);
+            Map<String, Object> r = card(c, id);
+            r.put("pin", pin);
+            return r;
+        }
+        if (!get && is(p, "cards", "*", "status")) {
+            long id = Http.id(p[1]);
+            String st = up(Http.text(in, "status", true));
+            if (!"B".equals(st)) {
+                need(u, "MANAGER");
+            }
+            Db.exec(c, "begin bk_core.set_card_status(?, ?); end;", id, st);
+            return card(c, id);
+        }
+        throw new Http.Fail(404, "not_found", "Δεν υπάρχει αυτή η κλήση");
     }
 
     // ---------------------------------------------------------------------------------------------

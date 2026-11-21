@@ -38,4 +38,13 @@ select p.id, date '2020-01-01', v.min_balance, v.rate from (values
 ) v (code, min_balance, rate)
 join bk_product p on p.code = v.code
 where not exists (select 1 from bk_rate r where r.product_id = p.id);
+
+-- the ATMs, with their first cash
+insert into bk_atm (code, name, address, cash)
+select v.code, v.name, v.address, v.cash from (values
+  ('ATM01', 'Πάτρα κέντρο',        'Αγίου Νικολάου 12, Πάτρα',       30000),
+  ('ATM02', 'Αθήνα Σύνταγμα',      'Πανεπιστημίου 5, Αθήνα',         50000),
+  ('ATM03', 'Θεσσαλονίκη λιμάνι',  'Λεωφόρος Νίκης 30, Θεσσαλονίκη', 40000)
+) v (code, name, address, cash)
+where not exists (select 1 from bk_atm a where a.code = v.code);
 commit;

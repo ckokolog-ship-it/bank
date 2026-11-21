@@ -58,6 +58,7 @@ def conn():
         cur.execute('insert into bk_user (username, full_name, role, pw_hash, pw_salt, pw_iter) values (:u, :f, :r, :h, :s, 1000)',
                     u=name, f='Test ' + name, r=role, h=hashlib.pbkdf2_hmac('sha256', PW.encode(), salt, 1000), s=salt)
     c.commit()
+    TOKENS.clear()                          # (their sessions gone with them: a module of tests after another)
     yield c
     c.close()
 
