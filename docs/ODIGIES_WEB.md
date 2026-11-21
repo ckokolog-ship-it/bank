@@ -1,0 +1,153 @@
+# Οι σελίδες και το REST (`bk-api`)
+
+Η υπηρεσία `bk-api` είναι ένα jar (Java 17 ή νεότερη, με τον `HttpServer` του JDK και JDBC). Δίνει δύο πράγματα:
+- **τις σελίδες** της τράπεζας, στο `http://<server>:8091/`·
+- **το REST**, στο `/api/`.
+
+Όλοι οι κανόνες μένουν στη βάση (`BK_CORE`). Η υπηρεσία απλώς τους καλεί, και τα λάθη `BK-1xx` φτάνουν στη σελίδα όπως είναι.
+
+## 1. Στο forms1 (Oracle Linux), ως υπηρεσία
+
+Η βάση πρέπει να είναι ήδη στημένη (README, «Γρήγορη εκκίνηση»). Από τον λογαριασμό σου, με sudo:
+
+```bash
+sudo -iu oracle git -C bank pull                                       # ο κώδικας (το checkout ~oracle/bank)
+sudo ~oracle/bank/api/install_service.sh                               # ζητά μία φορά τον κωδικό του BANK· χτίζει και ξεκινά
+sudo ~oracle/bank/api/install_service.sh --add-user admin ADMIN "Όνομα Επώνυμο"   # ο πρώτος χρήστης (ζητά τον κωδικό του)
+~oracle/bank/api/install_service.sh --status
+```
+
+Μετά, από οποιονδήποτε υπολογιστή του δικτύου: **http://192.168.178.200:8091/**
+
+- **Ο κωδικός του BANK:**
+  - φυλάσσεται στο `/etc/bk-api.env`, που διαβάζει μόνο ο root (600)· το systemd τον δίνει στην υπηρεσία·
+  - δεν μπαίνει ποτέ στο repo·
+  - αλλάζει με `sudo ~oracle/bank/api/install_service.sh --password`.
+- **Η υπηρεσία:**
+  - ονομάζεται `bk-api` (`systemctl status bk-api`, `journalctl -u bk-api`) και τρέχει ως `oracle`·
+  - ξεκινά μετά τη βάση (`oracle-free-26ai`), και ξανά μόνη της αν σταματήσει·
+  - το jar της είναι στο `/u01/app/oracle/bk-api`.
+  - ξεκινά από το `/u01/app/oracle/scripts/bk-api.sh` για το SELinux, όπως το mm-api.
+- **Ενημέρωση μετά από ένα νέο PR:**
+  - `git pull`·
+  - αν άλλαξε η βάση: `UNINSTALL` και `INSTALL` (README)·
+  - `sudo ~oracle/bank/api/install_service.sh`, που ξαναχτίζει το jar.
+- **Θύρα:** 8091, γιατί το mm-api έχει την 8090. Αλλάζει με `--port`. Αν τρέχει firewalld, η θύρα ανοίγει μόνη της.
+
+> Η σύνδεση είναι απλό HTTP, με τον κωδικό της σελίδας: μόνο σε δίκτυο που εμπιστεύεσαι.
+
+## 2. Τοπικά, για δοκιμή
+
+```bash
+cd api
+./mvnw -q -B package -DskipTests                          # target/bk-api.jar
+export BK_DB_URL=jdbc:oracle:thin:@//localhost:1521/FREEPDB1 BK_DB_USER=bank
+read -rs BK_DB_PASSWORD && export BK_DB_PASSWORD           # ο κωδικός, χωρίς να φαίνεται
+java -jar target/bk-api.jar --add-user admin ADMIN "Όνομα Επώνυμο"
+java -jar target/bk-api.jar                               # http://127.0.0.1:8091/
+```
+
+| Μεταβλητή | Τι |
+|---|---|
+| `BK_API_BIND` | Πού ακούει: `127.0.0.1` μόνο αυτός ο υπολογιστής (προεπιλογή), `0.0.0.0` το δίκτυο |
+| `BK_API_PORT` | Η θύρα (8091) |
+| `BK_DB_URL` | Η βάση: `jdbc:oracle:thin:@//host:1521/FREEPDB1`, ή `jdbc:oracle:thin:/@BK_DB` με wallet |
+| `BK_DB_USER`, `BK_DB_PASSWORD` | Χρήστης και κωδικός, χωρίς wallet |
+| `BK_TNS_ADMIN`, `BK_WALLET` | Με wallet: ο φάκελος του `tnsnames.ora` και του wallet |
+
+## 3. Οι χρήστες και οι ρόλοι
+
+| Ρόλος | Τι κάνει |
+|---|---|
+| `TELLER` (γκισέ) | Πελάτες (νέοι, διόρθωση), λογαριασμοί (άνοιγμα, συνδικαιούχοι), κινήσεις, καρτέλα, τόκοι, όρια· βλέπει κανόνες και προϊόντα |
+| `MANAGER` | Και: δέσμευση και αποδέσμευση, όριο υπερανάληψης, κλείσιμο λογαριασμού, αντιλογισμός, κανόνες, επιτόκια, κλείσιμο ημέρας |
+| `ADMIN` | Και: οι χρήστες (νέοι, ρόλος, ενεργός, νέος κωδικός, ξεκλείδωμα) |
+
+- **Ο κωδικός:**
+  - τουλάχιστον 8 χαρακτήρες·
+  - φυλάσσεται ως PBKDF2-SHA256 με δικό του salt, ποτέ ο ίδιος ο κωδικός.
+- **Κλείδωμα:** μετά από 5 λάθος κωδικούς στη σειρά ο χρήστης κλειδώνει. Τον ξεκλειδώνει ένας ADMIN, ή:
+  ```bash
+  java -jar bk-api.jar --password <χρήστης>
+  ```
+- **Η σύνδεση:**
+  - κρατά 12 ώρες· η βάση κρατά μόνο το SHA-256 του token·
+  - ένας χρήστης που απενεργοποιείται ή παίρνει νέο κωδικό βγαίνει αμέσως από όλες τις συνδέσεις του.
+- **Ποιος έκανε την κίνηση:** κάθε εγγραφή γράφει τον χρήστη που την έκανε (`BK_ENTRY.CREATED_BY`).
+- **Πάντα ένας ADMIN:** μένει πάντα ένας ενεργός ADMIN.
+
+## 4. Οι σελίδες
+
+| Σελίδα | Τι έχει |
+|---|---|
+| **Πελάτες** | Αναζήτηση (όνομα χωρίς τόνους, ΑΦΜ, κωδικός, τηλέφωνο), νέος πελάτης, διόρθωση· οι λογαριασμοί του και νέος λογαριασμός |
+| **Λογαριασμοί** | Αναζήτηση (IBAN, όνομα ή ΑΦΜ οποιουδήποτε δικαιούχου), φίλτρο κατάστασης |
+| **Ο λογαριασμός** | Υπόλοιπο, διαθέσιμο, δεδουλευμένοι τόκοι, επιτόκιο τώρα· οι ενέργειες του MANAGER. Και οι καρτέλες παρακάτω |
+| **Κίνηση** | Κατάθεση, ανάληψη, μεταφορά (με IBAN ή αριθμό), σε άλλη ή από άλλη τράπεζα· ημερομηνία αξίας, κανάλι· δείχνει την εγγραφή που έγινε |
+| **Η εγγραφή** | Οι γραμμές της (διπλογραφία), ποιος την έκανε, ο αντιλογισμός της |
+| **Κανόνες** | Όλοι οι κανόνες κινήσεων· νέος ή αφαίρεση (MANAGER) |
+| **Προϊόντα** | Τα επιτόκια τώρα ανά κλιμάκιο και το ιστορικό τους· αλλαγή από την εργάσιμη ημέρα και μετά (MANAGER) |
+| **Ημέρα** | Η εργάσιμη ημέρα, ο έλεγχος (`BK_CHECK`), το κλείσιμο ημέρας (MANAGER) |
+| **Χρήστες** | (ADMIN) |
+
+Οι καρτέλες του λογαριασμού:
+
+| Καρτέλα | Τι έχει |
+|---|---|
+| **Καρτέλα** | Οι κινήσεις μιας περιόδου, με το προοδευτικό υπόλοιπο, από μεταφορά και σε μεταφορά· οι αντιλογισμένες διαγραμμένες |
+| **Τόκοι** | Ο τόκος κάθε μέρας, με όλα τα στοιχεία του, και οι κεφαλαιοποιήσεις με τον φόρο |
+| **Όρια και κανόνες** | Για κάθε κίνηση και κανάλι, τι επιτρέπεται και πόσο έχει χρησιμοποιηθεί κάθε όριο σήμερα και αυτόν τον μήνα· οι κανόνες που τον αφορούν, και νέος κανόνας για αυτόν τον λογαριασμό |
+| **Δικαιούχοι** | Ο κύριος δικαιούχος και οι συνδικαιούχοι· προσθήκη και αφαίρεση |
+
+Οι σελίδες δουλεύουν και στο κινητό, σε φωτεινό και σκοτεινό θέμα.
+
+## 5. Το REST
+
+Όλα σε JSON:
+- **ημερομηνίες:** `YYYY-MM-DD`· **ποσά:** αριθμοί·
+- **σύνδεση:** πρώτα `POST /api/auth/login`· μετά κάθε κλήση με `Authorization: Bearer <token>`·
+- **λάθη:** `{"error": "BK-119", "message": "..."}`, με HTTP status:
+
+  | Status | Πότε |
+  |---|---|
+  | 400 | Κανόνας της τράπεζας |
+  | 401 | Χωρίς σύνδεση |
+  | 403 | Δεν φτάνει ο ρόλος |
+  | 404 | Δεν υπάρχει |
+  | 423 | Κλειδωμένος χρήστης |
+
+| Κλήση | Τι | Ρόλος |
+|---|---|---|
+| `POST /api/auth/login {username, password}` | Το token (12 ώρες) | όλοι |
+| `POST /api/auth/logout`, `GET /api/auth/me` | | |
+| `GET /api/health` | Η υπηρεσία και η βάση της | όλοι |
+| `GET /api/day`, `POST /api/day/close` | Η εργάσιμη ημέρα· το κλείσιμό της | · M |
+| `GET /api/check` | Οι γραμμές του `BK_CHECK` | |
+| `GET /api/customers?q=&limit=&offset=`, `GET /api/customers/{id}` | Πελάτες· ένας, με τους λογαριασμούς του | |
+| `POST /api/customers {name, afm, phone, email, address, birth_date, id_card}` | Νέος | |
+| `POST /api/customers/{id} {…, active}` | Διόρθωση (ό,τι δεν δίνεται μένει) | |
+| `GET /api/products`, `POST /api/products/{code}/rates {valid_from, min_balance, rate}` | Προϊόντα και επιτόκια | · M |
+| `GET /api/accounts?q=&status=&limit=&offset=`, `GET /api/accounts/{id}` | Λογαριασμοί | |
+| `POST /api/accounts {product, customer_id, od_limit, name}` | Άνοιγμα | |
+| `POST /api/accounts/{id}/holders {customer_id}`, `…/holders/{customer}/remove` | Συνδικαιούχοι | |
+| `POST /api/accounts/{id}/status {status}`, `…/od-limit {od_limit}`, `…/close` | | M |
+| `GET /api/accounts/{id}/statement?from=&to=` | Καρτέλα | |
+| `GET /api/accounts/{id}/interest?from=&to=` | Τόκοι | |
+| `GET /api/accounts/{id}/limits` | `BK_LIMITS` και οι κανόνες του | |
+| `POST /api/movements {kind, account_id, to_account, iban, amount, descr, value_date, channel}` | Κίνηση: `DEP`, `WDR`, `TRF`, `OUT`, `INC` | |
+| `GET /api/entries/{id}`, `POST /api/entries/{id}/reverse {descr}` | Εγγραφή· αντιλογισμός | · M |
+| `GET /api/rules?product=&account_id=&level=` | Κανόνες | |
+| `POST /api/rules {product, account_id, op, channel, allowed, min_amount, …}`, `POST /api/rules/{id}/remove` | | M |
+| `GET /api/users`, `POST /api/users`, `POST /api/users/{id} {full_name, role, active, password, unlock}` | Χρήστες | ADMIN |
+
+## 6. Tests
+
+Το `tests/test_api.py` κάνει τα εξής:
+1. ξεκινά το jar σε μια ελεύθερη θύρα·
+2. φτιάχνει τους χρήστες του (`tst-…`)·
+3. το ρωτά όπως οι σελίδες: ρόλοι, κλείδωμα, πελάτες, κινήσεις και καρτέλα, αντιλογισμός, κανόνες και όρια, επιτόκια, κλείσιμο ημέρας, χρήστες, οι σελίδες.
+
+```bash
+(cd api && ./mvnw -q -B package -DskipTests)
+BANK_DSN=bank/<κωδικός>@localhost:1521/FREEPDB1 python3 -m pytest -q tests
+```

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bank</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form id="login-form" class="card login-card">
+      <h1>🏦 Bank</h1>
+      <p class="muted">Τα δεδομένα επίδειξης είναι τυχαία.</p>
+      <label>Χρήστης <input id="login-user" autocomplete="username" required></label>
+      <label>Κωδικός <input id="login-pw" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="primary">Είσοδος</button>
+      <p id="login-msg" class="error"></p>
+    </form>
+  </div>
+  <div id="app" class="hidden">
+    <header class="top">
+      <div class="brand">🏦 Bank</div>
+      <nav id="nav"></nav>
+      <div class="who"><span id="day-chip" class="chip"></span><span id="who"></span>
+        <button id="logout" class="link">Έξοδος</button></div>
+    </header>
+    <main id="main"></main>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+</body>
+</html>
