@@ -40,6 +40,7 @@ public final class Main {
         Db db = Db.fromEnvironment();
         HttpServer server = HttpServer.create(new InetSocketAddress(bind, port), 64);
         new Api(db).register(server);
+        new Atm(db).register(server);
         Web.register(server);
         server.setExecutor(Executors.newFixedThreadPool(8));
         server.start();

@@ -40,6 +40,8 @@ h3 { font-size: 15px; margin: 18px 0 8px; }
 .grp-items a:hover { background: var(--row); }
 .grp-items a.on { background: var(--accent-bg); color: var(--accent); font-weight: 600; border-left-color: var(--accent); }
 .scrim { display: none; }
+.pin-notice { border-color: var(--accent); background: var(--accent-bg); }
+.pin { font: 700 34px ui-monospace, monospace; letter-spacing: 10px; color: var(--accent); margin: 6px 0; }
 .chip { background: var(--accent-bg); color: var(--accent); padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 main { padding: 16px; max-width: 1280px; width: 100%; margin: 0 auto; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }

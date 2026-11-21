@@ -136,6 +136,11 @@ begin
     bk_core.add_holder(acc(j * 3), cust(41 - j));
   end loop;
 
+  -- the debit cards: one for each current account, of its primary holder; their PIN given at the counter
+  for x in (select a.id from bk_account a join bk_product p on p.id = a.product_id where p.kind = 'CUR' order by a.id) loop
+    n := bk_core.new_card(x.id);
+  end loop;
+
   -- the rules of the movements: of the bank, of the products, of a few accounts
   n := bk_core.set_rule(null, null, 'DEP', 'WEB', p_allowed => 'N');
   n := bk_core.set_rule(null, null, 'WDR', 'WEB', p_allowed => 'N');
