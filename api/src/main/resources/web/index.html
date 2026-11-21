@@ -20,12 +20,15 @@
   </div>
   <div id="app" class="hidden">
     <header class="top">
+      <button id="menu-btn" class="menu-btn" aria-label="Μενού" aria-expanded="false" aria-controls="side">☰</button>
       <div class="brand">🏦 Bank</div>
-      <nav id="nav"></nav>
       <div class="who"><span id="day-chip" class="chip"></span><span id="who"></span>
         <button id="logout" class="link">Έξοδος</button></div>
     </header>
-    <main id="main"></main>
+    <div class="shell">
+      <aside id="side" class="side"><nav id="nav" aria-label="Μενού"></nav></aside>
+      <main id="main"></main>
+    </div>
   </div>
   <div id="toast" class="toast hidden"></div>
 </body>
