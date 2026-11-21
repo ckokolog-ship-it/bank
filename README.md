@@ -25,7 +25,7 @@
 |---|---|---|
 | 1 | **Βάση:** πελάτες, προϊόντα και επιτόκια, λογαριασμοί και συνδικαιούχοι, κινήσεις με διπλογραφία, τόκοι κάθε μέρας και κεφαλαιοποίηση με τον φόρο, κλείσιμο ημέρας, καρτέλα | ✔ |
 | 2 | **Κανόνες κινήσεων:** ανά λογαριασμό, προϊόν ή τράπεζα, και ανά κανάλι (γκισέ, e-banking, ATM)· επιτρέπεται ή όχι, όρια ποσού, ημέρας και μήνα, προμήθειες με δωρεάν κινήσεις, ελάχιστο υπόλοιπο | ✔ |
-| 3 | REST και σελίδες web | |
+| 3 | **REST και σελίδες web:** πελάτες, λογαριασμοί, κινήσεις, καρτέλα, τόκοι, κανόνες και όρια, επιτόκια, κλείσιμο ημέρας· χρήστες με ρόλους | ✔ |
 | 4 | Εφαρμογή ATM | |
 | 5 | Oracle Forms | |
 | 6 | Oracle Reports: statement λογαριασμού, εξήγηση των τόκων | |
@@ -50,18 +50,27 @@ sqlplus bank@FREEPDB1 @BK_CHECK.sql                       # συμφωνούν �
 
 Μπαίνουν σε περίπου 10 δευτερόλεπτα.
 
+Οι σελίδες, στο http://<server>:8091/ (στο Linux ως υπηρεσία: [docs/ODIGIES_WEB.md](docs/ODIGIES_WEB.md)):
+
+```bash
+sudo ~oracle/bank/api/install_service.sh                                          # ζητά τον κωδικό του BANK· χτίζει και ξεκινά
+sudo ~oracle/bank/api/install_service.sh --add-user admin ADMIN "Όνομα Επώνυμο"   # ο πρώτος χρήστης των σελίδων
+```
+
 ## 📚 Τεκμηρίωση
 
 | Έγγραφο | Τι έχει |
 |---|---|
+| [docs/ODIGIES_WEB.md](docs/ODIGIES_WEB.md) | Οι σελίδες και το REST (`bk-api`): εγκατάσταση στο Linux, χρήστες και ρόλοι, κάθε σελίδα, κάθε κλήση |
 | [docs/ODIGIES_VASI.md](docs/ODIGIES_VASI.md) | Η βάση: οι πίνακες, η διπλογραφία, οι ημερομηνίες, οι τόκοι (με τα μαθηματικά τους), το κλείσιμο ημέρας, οι κανόνες των κινήσεων, όλες οι διαδικασίες, τα λάθη `BK-1xx` |
 
 ## 🧪 Tests
 
-Τα tests τρέχουν πάνω σε ζωντανή βάση, χωρίς mocks:
+Τα tests τρέχουν πάνω σε ζωντανή βάση, χωρίς mocks· τα tests του REST ξεκινούν και το jar:
 
 ```bash
 pip install pytest oracledb
+(cd api && ./mvnw -q -B package -DskipTests)
 BANK_DSN=bank/<κωδικός>@localhost:1521/FREEPDB1 python -m pytest -q tests
 ```
 
@@ -71,6 +80,7 @@ BANK_DSN=bank/<κωδικός>@localhost:1521/FREEPDB1 python -m pytest -q tests
 bank/
 ├── db/       η βάση: BK_TABLES (πίνακες, όψεις, BK_CHECK), BK_BASE (λογαριασμοί της τράπεζας, προϊόντα, επιτόκια),
 │             BK_CORE (όλοι οι κανόνες), BK_DEMO (τυχαία δεδομένα), INSTALL, UNINSTALL, CREATE_USER
+├── api/      bk-api: το REST και οι σελίδες (Java, resources/web), install_service.sh
 ├── tests/    pytest πάνω σε ζωντανή βάση
 └── docs/     οι οδηγίες
 ```

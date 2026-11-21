@@ -30,6 +30,10 @@ create or replace package bk_core as
   function new_customer(p_name varchar2, p_afm varchar2 default null, p_phone varchar2 default null,
                         p_email varchar2 default null, p_address varchar2 default null,
                         p_birth_date date default null, p_id_card varchar2 default null) return number;
+  -- its data corrected (its AFM too, if it has none yet or it was wrong); inactive (N): no new account
+  procedure update_customer(p_customer_id number, p_name varchar2, p_afm varchar2, p_phone varchar2,
+                            p_email varchar2, p_address varchar2, p_birth_date date, p_id_card varchar2,
+                            p_active varchar2 default 'Y');
 
   -- the products and their rates (% a year, from a day on, by tier)
   procedure set_rate(p_product_id number, p_valid_from date, p_min_balance number, p_rate number);
@@ -183,6 +187,33 @@ create or replace package body bk_core as
     returning id into v;
     update bk_customer set code = 'C' || lpad(v, 6, '0') where id = v;
     return v;
+  exception
+    when dup_val_on_index then
+      fail(6, 'Υπάρχει ήδη πελάτης με ΑΦΜ ' || p_afm);
+  end;
+
+  procedure update_customer(p_customer_id number, p_name varchar2, p_afm varchar2, p_phone varchar2,
+                            p_email varchar2, p_address varchar2, p_birth_date date, p_id_card varchar2,
+                            p_active varchar2 default 'Y') is
+  begin
+    if trim(p_name) is null then
+      fail(3, 'Ο πελάτης θέλει ονοματεπώνυμο');
+    end if;
+    if p_afm is not null and afm_ok(p_afm) = 'N' then
+      fail(4, 'Λάθος ΑΦΜ: ' || p_afm);
+    end if;
+    if p_email is not null and not regexp_like(p_email, '^[^@ ]+@[^@ ]+\.[^@ ]+$') then
+      fail(5, 'Λάθος email: ' || p_email);
+    end if;
+    if nvl(p_active, 'Y') not in ('Y', 'N') then
+      fail(9, 'Ενεργός: Y ή N');
+    end if;
+    update bk_customer set name = trim(p_name), afm = p_afm, phone = p_phone, email = p_email, address = p_address,
+           birth_date = p_birth_date, id_card = p_id_card, active = nvl(p_active, 'Y')
+    where id = p_customer_id;
+    if sql%rowcount = 0 then
+      fail(9, 'Δεν υπάρχει πελάτης ' || p_customer_id);
+    end if;
   exception
     when dup_val_on_index then
       fail(6, 'Υπάρχει ήδη πελάτης με ΑΦΜ ' || p_afm);

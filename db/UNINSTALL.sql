@@ -7,6 +7,8 @@ drop view if exists bk_limits;
 drop view if exists bk_check;
 drop view if exists bk_statement;
 drop view if exists bk_value_balance;
+drop table if exists bk_session purge;
+drop table if exists bk_user purge;
 drop table if exists bk_rule purge;
 drop table if exists bk_capital purge;
 drop table if exists bk_accrual purge;
