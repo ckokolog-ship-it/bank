@@ -512,13 +512,21 @@ select r.id, case when r.account_id is not null then 'ACCOUNT' when r.product_id
 from bk_rule r, bk_product p, bk_account a
 where p.id (+) = r.product_id and a.id (+) = r.account_id;
 
--- the credit cards: their account, product, holder, limit, what is owed and what may be spent (BK_CCARD keeps its key)
+-- the credit cards: their account (ID too, for the forms), product, holder, limit, what is owed and what may be
+-- spent (BK_CCARD keeps its key)
 create or replace view bk_ccard_v as
-select k.account_id, a.iban, p.code product, p.name product_name, a.status, k.credit_limit, a.balance, k.held,
+select k.account_id id, k.account_id, a.iban, p.code product, p.name product_name, a.status, k.credit_limit, a.balance, k.held,
        k.credit_limit + a.balance - k.held available, greatest(-a.balance, 0) owed, k.stmt_day, k.last_stmt,
        (select c.name from bk_holder h, bk_customer c where h.account_id = a.id and h.role = 'P' and c.id = h.customer_id) holder
 from bk_ccard k, bk_account a, bk_product p
 where a.id = k.account_id and p.id = a.product_id;
+
+-- the statements of the cards, with their days as text too (DD/MM/YYYY: the parameters of the report)
+create or replace view bk_cc_statement_v as
+select s.account_id, s.stmt_date, s.period_from, s.opening, s.purchases, s.payments, s.interest, s.fees, s.closing,
+       s.min_due, s.due_date, s.late_fee, to_char(s.stmt_date, 'DD/MM/YYYY') stmt_text,
+       to_char(s.period_from, 'DD/MM/YYYY') from_text
+from bk_cc_statement s;
 
 -- the cards, with the IBAN of their account and the name of their holder (BK_CARD keeps its key); never the PIN
 create or replace view bk_card_v as

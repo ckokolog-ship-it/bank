@@ -23,6 +23,7 @@
       <MenuItem Name="ACCOUNTS" Label="Logariasmoi" CommandType="PL/SQL" MenuItemCode="new_form('BK_ACCOUNTS');"/>
       <MenuItem Name="MOVE" Label="Kinisi" CommandType="PL/SQL" MenuItemCode="new_form('BK_MOVE');"/>
       <MenuItem Name="CARDS" Label="Kartes" CommandType="PL/SQL" MenuItemCode="new_form('BK_CARDS');"/>
+      <MenuItem Name="CCARDS" Label="Pistotikes kartes" CommandType="PL/SQL" MenuItemCode="new_form('BK_CCARDS');"/>
       <MenuItem Name="DAY" Label="Imera kai kleisimo" CommandType="PL/SQL" MenuItemCode="new_form('BK_DAY');"/>
     </Menu>
     <Menu Name="SETUP_MENU">

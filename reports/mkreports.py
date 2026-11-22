@@ -4,11 +4,13 @@ build_reports.sh, on forms1):
 
   BK_STATEMENT  the statement (καρτέλα) of an account: its lines of the period by their book date, the value
                 date, the entry and its words, debit, credit, the running balance
+  BK_CC_STATEMENT  the statement (κίνηση) of a credit card: its lines of the period of the statement, the balance
+                what is owed (charges less payments); under the title its minimum and its due date
   BK_INTEREST   its interest: the stretches of the period (balance x rate x days / days of the year) as
                 credit, the capitalizations (gross; the tax and the net in the words) as debit; the balance:
                 the interest accrued and not capitalized yet (6 decimals, as BK_ACCRUAL)
 
-The parameters: P_KIND (S, I), P_ACCOUNT (the id of the account), P_FROM and P_TO (DD/MM/YYYY). The rows:
+The parameters: P_KIND (S, I, C), P_ACCOUNT (the id of the account), P_FROM and P_TO (DD/MM/YYYY). The rows:
 bk_report.report_rows of the database (db/BK_REPORT.sql). On every page, on top "from the carry-over" (από
 μεταφορά): the totals before its first row (the first PRIOR_*, a summary reset at the page); at the bottom "to
 the carry-over" (σε μεταφορά): with its last row (the last CUM_* and BALANCE). After the last row: the totals
@@ -63,6 +65,7 @@ QUERY = ("select seq, ldate, doc_text, descr, debit, credit, balance, prior_debi
 MONEY, MONEY6 = 'NNNGNNNGNN0D00', 'NNNGNNNGNN0D000000'
 REPORTS = {
     'BK_STATEMENT': dict(kind='S', mask=MONEY),
+    'BK_CC_STATEMENT': dict(kind='C', mask=MONEY),
     # the interest of a stretch and the accrued ones with 6 decimals (as BK_ACCRUAL); a capitalization 2
     'BK_INTEREST': dict(kind='I', mask=MONEY6, masks={'DEBIT': MONEY}),
 }
@@ -188,7 +191,8 @@ def build(name, r):
                     '      </textSource>',
                     '    </function>'])
     fn('cf_titleformula', 'return bk_report.title(:P_KIND, :P_ACCOUNT);')
-    fn('cf_periodformula', "return bk_report.label('PERIOD') || ': ' || :P_FROM || ' - ' || :P_TO;")
+    fn('cf_periodformula', "return bk_report.period(:P_KIND, :P_ACCOUNT, to_date(:P_FROM, 'DD/MM/YYYY'), "
+                           "to_date(:P_TO, 'DD/MM/YYYY'));")
     for lb in LABELS:
         fn(formula_name(lb).lower() + 'formula', "return bk_report.label('%s', :P_KIND);" % lb)
     out += ['  </programUnits>',

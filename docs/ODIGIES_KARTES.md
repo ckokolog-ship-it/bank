@@ -5,7 +5,20 @@
 - άρα η διπλογραφία, το `BK_CHECK`, η καρτέλα και τα reports δουλεύουν όπως σε κάθε λογαριασμό·
 - η κάρτα (`new_card`) έχει PAN με Luhn και PIN, και δουλεύει και στο ATM, όπως μια χρεωστική.
 
-Όλοι οι κανόνες είναι στο `BK_CORE`. Αυτό το βήμα έχει **μόνο τη βάση**· οι φόρμες, οι σελίδες και το report της κίνησης (statement) ακολουθούν.
+Όλοι οι κανόνες είναι στο `BK_CORE`. Στις φόρμες υπάρχει η **Πιστωτικές κάρτες** (`BK_CCARDS`, [ODIGIES_FORMS.md](ODIGIES_FORMS.md)), και η κίνηση τυπώνεται με το report `BK_CC_STATEMENT` ([ODIGIES_REPORTS.md](ODIGIES_REPORTS.md)).
+
+## 0. Στο forms1
+
+```bash
+sudo -iu oracle git -C bank pull
+# η βάση: τα δεδομένα μένουν, μπαίνουν οι κάρτες (πίνακες, προϊόντα VISA και GOLD)
+sudo -iu oracle bash -c 'cd ~/bank/db && export NLS_LANG=GREEK_GREECE.AL32UTF8 && sqlplus bank@localhost:1521/FREEPDB1 @INSTALL.sql'
+su - oracle
+cd ~/bank/forms && ./build_forms.sh          # όλες οι φόρμες (το μενού έχει τη νέα)
+cd ~/bank/reports && ./build_reports.sh      # και το BK_CC_STATEMENT
+```
+
+Με το `INSTALL.sql` χωρίς `demo`, οι κάρτες δεν έχουν κινήσεις. Για να δεις κάρτες με έναν χρόνο κινήσεων, χρειάζεται `UNINSTALL.sql` και `INSTALL.sql demo`, που **σβήνουν όλα τα δεδομένα**.
 
 ## 1. Το όριο, και δύο αγορές την ίδια στιγμή
 

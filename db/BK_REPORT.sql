@@ -3,6 +3,9 @@
 --
 --   P_KIND S  the statement of an account (BK_STATEMENT): its lines of the period by their book date, the
 --             value date of each, debit, credit, the running balance; before them its balance before the period
+--   P_KIND C  the statement of a credit card (BK_CC_STATEMENT, P_FROM .. P_TO its period): its lines as the
+--             statement of an account, but the running balance what is owed (charges less payments); in the
+--             heading the minimum to pay and its day
 --   P_KIND I  its interest (BK_INTEREST): the stretches of the period (balance x rate x days / days of the year)
 --             as credit, the capitalizations as debit (gross; its tax in the words), the running balance: the
 --             interest accrued and not capitalized yet; before them the accrued before the period
@@ -30,6 +33,8 @@ create or replace package bk_report as
   -- the title of a report (its account: IBAN, holder, product) and the words of it
   function title(p_kind varchar2, p_account_id number) return varchar2;
   function label(p_key varchar2, p_kind varchar2 default null) return varchar2;
+  -- the line under the title: the period (C: the statement of that day, its minimum and its due date)
+  function period(p_kind varchar2, p_account_id number, p_from date, p_to date) return varchar2;
 end bk_report;
 /
 
@@ -57,6 +62,7 @@ create or replace package body bk_report as
     n pls_integer := 0;
     a number;
     k varchar2(1) := upper(p_kind);
+    sg number := case when upper(p_kind) = 'C' then -1 else 1 end;     -- (C: the balance what is owed)
 
     procedure out_(p_date date, p_doc varchar2, p_descr varchar2, p_debit number, p_credit number) is
     begin
@@ -72,7 +78,7 @@ create or replace package body bk_report as
       r.prior_balance := prev;
       dsum := dsum + nvl(p_debit, 0);
       csum := csum + nvl(p_credit, 0);
-      prev := prev + nvl(p_credit, 0) - nvl(p_debit, 0);
+      prev := prev + sg * (nvl(p_credit, 0) - nvl(p_debit, 0));
       r.balance := prev;
       r.cum_debit := dsum;
       r.cum_credit := csum;
@@ -82,9 +88,9 @@ create or replace package body bk_report as
     if a = 0 then
       raise_application_error(-20108, 'BK-108: Δεν υπάρχει λογαριασμός ' || p_account_id);
     end if;
-    if k = 'S' then
+    if k in ('S', 'C') then
       -- its balance before the period (its lines by their book date), then its lines of the period
-      select nvl(sum(l.credit - l.debit), 0) into prev
+      select sg * nvl(sum(l.credit - l.debit), 0) into prev
       from bk_line l join bk_entry e on e.id = l.entry_id
       where l.account_id = p_account_id and e.book_date < trunc(p_from);
       for x in (select e.book_date, e.value_date, e.kind, l.op, e.descr, e.id, l.debit, l.credit,
@@ -93,7 +99,8 @@ create or replace package body bk_report as
                 where l.account_id = p_account_id and e.book_date between trunc(p_from) and trunc(p_to)
                 order by e.book_date, e.id, l.id) loop
         out_(x.book_date, to_char(x.value_date, 'DD/MM/YYYY'),
-             '#' || x.id || ' ' || kind_text(x.kind, x.op) || case when x.descr is not null then ': ' || x.descr end
+             '#' || x.id || ' ' || case when x.kind = 'PUR' and x.descr is not null then x.descr     -- (Αγορά: ...)
+                                        else kind_text(x.kind, x.op) || case when x.descr is not null then ': ' || x.descr end end
              || case when x.reversed = 'Y' then ' (αντιλογίστηκε)' end,
              nullif(x.debit, 0), nullif(x.credit, 0));
         pipe row (r);
@@ -120,7 +127,7 @@ create or replace package body bk_report as
         pipe row (r);
       end loop;
     else
-      raise_application_error(-20145, 'BK-145: Καρτέλα (S) ή τόκοι (I)');
+      raise_application_error(-20145, 'BK-145: Καρτέλα (S), τόκοι (I) ή κίνηση κάρτας (C)');
     end if;
     if n = 0 then
       -- nothing in the period: the balance before it, alone
@@ -134,7 +141,8 @@ create or replace package body bk_report as
     t varchar2(300);
   begin
     select a.iban || '  ·  ' || a.holder || '  ·  ' || a.product_name into t from bk_account_v a where a.id = p_account_id;
-    return case upper(p_kind) when 'I' then 'Τόκοι λογαριασμού ' else 'Καρτέλα λογαριασμού ' end || t;
+    return case upper(p_kind) when 'I' then 'Τόκοι λογαριασμού ' when 'C' then 'Κίνηση πιστωτικής κάρτας '
+                              else 'Καρτέλα λογαριασμού ' end || t;
   exception
     when no_data_found then
       return p_account_id;
@@ -143,6 +151,13 @@ create or replace package body bk_report as
   function label(p_key varchar2, p_kind varchar2 default null) return varchar2 is
     i boolean := upper(p_kind) = 'I';
   begin
+    if upper(p_kind) = 'C' then
+      return case upper(p_key)
+        when 'DATE' then 'Ημερομηνία' when 'DOC' then 'Αξία' when 'DESCR' then 'Περιγραφή'
+        when 'DEBIT' then 'Χρεώσεις' when 'CREDIT' then 'Πληρωμές' when 'BALANCE' then 'Οφειλή'
+        when 'OPEN' then 'Προηγούμενο υπόλοιπο' when 'CLOSE' then 'Νέο υπόλοιπο'
+        else label(p_key) end;
+    end if;
     return case upper(p_key)
       when 'DATE' then case when i then 'Από' else 'Λογισμός' end
       when 'DOC' then case when i then 'Έως' else 'Αξία' end
@@ -158,6 +173,25 @@ create or replace package body bk_report as
       when 'PAGE' then 'Σελίδα'
       when 'PERIOD' then 'Διάστημα'
       else p_key end;
+  end;
+
+  function period(p_kind varchar2, p_account_id number, p_from date, p_to date) return varchar2 is
+    s bk_cc_statement%rowtype;
+    lim number;
+  begin
+    if upper(p_kind) = 'C' then
+      begin
+        select * into s from bk_cc_statement where account_id = p_account_id and stmt_date = trunc(p_to);
+        select credit_limit into lim from bk_ccard where account_id = p_account_id;
+        return 'Κίνηση της ' || to_char(s.stmt_date, 'DD/MM/YYYY') || ' (από ' || to_char(s.period_from, 'DD/MM/YYYY')
+               || ')  ·  Ελάχιστη καταβολή ' || money(s.min_due) || ' € ως ' || to_char(s.due_date, 'DD/MM/YYYY')
+               || '  ·  Όριο ' || money(lim) || ' €';
+      exception
+        when no_data_found then
+          null;
+      end;
+    end if;
+    return label('PERIOD') || ': ' || to_char(p_from, 'DD/MM/YYYY') || ' - ' || to_char(p_to, 'DD/MM/YYYY');
   end;
 end bk_report;
 /
