@@ -28,7 +28,7 @@ body { margin: 0; background: var(--room); color: var(--fg); font: 15px/1.4 syst
 .screen .msg { margin: 10px 0; text-align: center; }
 .screen .err { color: #ffb4ab; text-align: center; margin: 10px 0; }
 .opts { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: repeat(4, 34px); gap: 10px 8px; margin-top: auto; }
-.opt { display: flex; align-items: center; font-size: 14px; color: #fff; }
+.opt { display: flex; align-items: center; font-size: 14px; color: #fff; line-height: 1.15; }
 .opt.l::before { content: '◀ '; color: var(--accent); }
 .opt.r { justify-content: flex-end; }
 .opt.r::after { content: ' ▶'; color: var(--accent); }
@@ -54,6 +54,7 @@ body { margin: 0; background: var(--room); color: var(--fg); font: 15px/1.4 syst
 .note { width: 44px; height: 22px; border-radius: 3px; font: 700 11px system-ui; color: #1d2430; display: grid; place-items: center;
         animation: out .5s ease-out both; }
 .note.n50 { background: #f0a868; } .note.n20 { background: #7fb0e0; } .note.n10 { background: #e59c9c; }
+.note.n5 { background: #b9c3cf; } .note.n100 { background: #8fcf9a; } .note.n200 { background: #e8d27a; } .note.n500 { background: #c4a6e0; }
 @keyframes out { from { transform: translateY(-14px); opacity: 0; } to { transform: none; opacity: 1; } }
 .side { width: 320px; max-width: 100%; display: grid; gap: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }

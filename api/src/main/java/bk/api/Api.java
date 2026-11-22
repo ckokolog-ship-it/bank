@@ -52,7 +52,9 @@ import java.util.Map;
  *   POST /api/cards/pins {pin, all}              a PIN to every card without one (all: to every card): the same
  *                                                (pin) or a new one each; the cards and their PIN back, once (M)
  *   POST /api/cards/{id}/status {status A|B|C}   B blocked (anyone); A again, C cancelled (M)
- *   GET  /api/atms   POST /api/atms/{code}/cash {amount}   the ATMs and their cash; cash in (+) or out (-) (M)
+ *   GET  /api/atms                               the ATMs, their cassettes, the notes they give, the most notes
+ *   POST /api/atms/{code}/fill {note, pieces}    a cassette filled (+) or emptied (-) (M)
+ *   POST /api/atms/notes {notes: "20,50", max_notes}   the notes the ATMs give; the most of one withdrawal (M)
  *   GET  /api/users   POST /api/users {username, full_name, role, password}
  *   POST /api/users/{id} {full_name, role, active, password, unlock}   (ADMIN)
  * </pre>
@@ -218,12 +220,19 @@ final class Api {
             }
             case "atms" -> {
                 if (get && p.length == 1) {
-                    return Db.rows(c, "select code, name, address, cash, active from bk_atm order by code");
+                    return atms(c);
                 }
-                if (!get && is(p, "atms", "*", "cash")) {
+                if (!get && is(p, "atms", "notes")) {
                     need(u, "MANAGER");
-                    Db.exec(c, "begin bk_core.atm_cash(?, ?); end;", p[1], Http.decimal(in, "amount", null));
-                    return Db.rows(c, "select code, name, address, cash, active from bk_atm order by code");
+                    Db.exec(c, "begin bk_core.set_atm_notes(?, ?); end;", Http.text(in, "notes", true),
+                            Http.decimal(in, "max_notes", null));
+                    return atms(c);
+                }
+                if (!get && is(p, "atms", "*", "fill")) {
+                    need(u, "MANAGER");
+                    Db.exec(c, "begin bk_core.atm_fill(?, ?, ?); end;", p[1], Http.decimal(in, "note", null),
+                            Http.decimal(in, "pieces", null));
+                    return atms(c);
                 }
             }
             case "users" -> {
@@ -235,6 +244,19 @@ final class Api {
             }
         }
         throw new Http.Fail(404, "not_found", "Δεν υπάρχει: /api/" + String.join("/", p));
+    }
+
+    private static Map<String, Object> atms(Connection c) throws SQLException {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("notes", Atm.notes(c));
+        r.put("max_notes", Atm.maxNotes(c));
+        List<Map<String, Object>> rows = Db.rows(c, "select id, code, name, address, cash, deposits, active from bk_atm order by code");
+        for (Map<String, Object> m : rows) {
+            m.put("cassettes", Db.rows(c, "select note, pieces, note * pieces amount from bk_atm_note where atm_id = ? "
+                    + "order by note desc", m.remove("id")));
+        }
+        r.put("atms", rows);
+        return r;
     }
 
     private static Map<String, Object> me(Auth.User u) {

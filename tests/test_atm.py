@@ -61,10 +61,12 @@ def test_cards_in_the_database(conn):
     cur.callproc('bk_core.set_card_status', [k, 'C'])
     with pytest.raises(oracledb.DatabaseError, match='BK-134'):
         cur.callproc('bk_core.set_card_status', [k, 'A'])
+    with pytest.raises(oracledb.DatabaseError, match='BK-140'):
+        cur.callproc('bk_core.atm_fill', ['ATM01', 10, 5])            # no cassette of 10
     with pytest.raises(oracledb.DatabaseError, match='BK-138'):
-        cur.callproc('bk_core.atm_cash', ['ATM01', 15])
+        cur.callproc('bk_core.atm_fill', ['ATM01', 20, 1.5])
     with pytest.raises(oracledb.DatabaseError, match='BK-137'):
-        cur.callproc('bk_core.atm_cash', ['NOPE', 10])
+        cur.callproc('bk_core.atm_fill', ['NOPE', 20, 1])
     conn.rollback()
 
 
@@ -98,7 +100,7 @@ def test_a_withdrawal(base):
     a = open_account(base, 1000)
     card = new_card(base, a)
     t = login(base, card)
-    cash = {m['code']: m['cash'] for m in ok(base, '/api/atms')}
+    cash = {m['code']: m['cash'] for m in ok(base, '/api/atms')['atms']}
     s, r = atm(base, 'ATM01', 'balance', token=t)
     assert s == 200 and r['balance'] == 1000 and r['iban'].endswith(a['iban'][-4:])
     assert r['withdraw_today'] in (600, 1000)                # (the demo: 600 a day from an ATM, a rule of the bank)
@@ -108,7 +110,7 @@ def test_a_withdrawal(base):
     assert s == 200 and r['notes'] == {'50': 2, '20': 1} and r['balance'] == 880 and r['fee'] == 0
     e = ok(base, '/api/entries/%d' % r['entry_id'])
     assert e['channel'] == 'ATM' and e['created_by'] == 'ATM01' and e['kind'] == 'WDR'
-    assert {m['code']: m['cash'] for m in ok(base, '/api/atms')}['ATM01'] == cash['ATM01'] - 120
+    assert {m['code']: m['cash'] for m in ok(base, '/api/atms')['atms']}['ATM01'] == cash['ATM01'] - 120
     # the rules of the channel ATM: of this account, at most 100 at a time, 150 a day
     ok(base, '/api/rules', {'account_id': a['id'], 'op': 'WDR', 'channel': 'ATM', 'allowed': 'Y', 'max_amount': 100,
                             'day_amount': 150}, 'tst-manager')
@@ -118,18 +120,24 @@ def test_a_withdrawal(base):
     assert s == 400 and r['error'] == 'BK-127'
     s, r = atm(base, 'ATM01', 'withdraw', {'amount': 40}, t)
     assert s == 400 and r['error'] == 'BK-128'
-    # an ATM with little cash: what it has
+    # an ATM with little cash: 2 notes of 50 € left, none of 20
     ok(base, '/api/rules', {'account_id': a['id'], 'op': 'WDR', 'channel': 'ATM', 'allowed': 'Y'}, 'tst-manager')
-    left = cash['ATM02'] - 100
-    ok(base, '/api/atms/ATM02/cash', {'amount': -left}, 'tst-manager')
+    have = {k['note']: k['pieces'] for m in ok(base, '/api/atms')['atms'] if m['code'] == 'ATM02' for k in m['cassettes']}
+    ok(base, '/api/atms/ATM02/fill', {'note': 50, 'pieces': 2 - have[50]}, 'tst-manager')
+    ok(base, '/api/atms/ATM02/fill', {'note': 20, 'pieces': -have[20]}, 'tst-manager')
     try:
         t2 = login(base, card, 'ATM02')
         s, r = atm(base, 'ATM02', 'withdraw', {'amount': 200}, t2)
         assert s == 400 and r['error'] == 'BK-139' and '100,00' in r['message']
-        assert atm(base, 'ATM02', 'withdraw', {'amount': 100}, t2)[0] == 200
+        s, r = atm(base, 'ATM02', 'withdraw', {'amount': 60}, t2)       # 3 x 20: none of 20
+        assert s == 400 and r['error'] == 'BK-138'
+        s, r = atm(base, 'ATM02', 'withdraw', {'amount': 100, 'notes': {'20': 5}}, t2)
+        assert s == 400 and r['error'] == 'BK-139' and '0 χαρτονομίσματα των 20' in r['message']
+        assert atm(base, 'ATM02', 'withdraw', {'amount': 100}, t2)[1]['notes'] == {'50': 2}
         assert atm(base, 'ATM01', 'balance', token=t2)[0] == 401     # a session of another ATM
     finally:
-        ok(base, '/api/atms/ATM02/cash', {'amount': left + 100}, 'tst-manager')
+        ok(base, '/api/atms/ATM02/fill', {'note': 50, 'pieces': have[50]}, 'tst-manager')
+        ok(base, '/api/atms/ATM02/fill', {'note': 20, 'pieces': have[20]}, 'tst-manager')
     assert ok(base, '/api/check') == []
 
 
@@ -170,7 +178,8 @@ def test_cards_at_the_counter(base):
     ok(base, '/api/cards/%d/status' % card['id'], {'status': 'C'}, 'tst-manager')
     s, r = call(base, '/api/cards/%d/pin' % card['id'], {}, tok(base, 'tst-teller'))
     assert s == 400 and r['error'] == 'BK-134'
-    assert call(base, '/api/atms/ATM01/cash', {'amount': 100}, tok(base, 'tst-teller'))[0] == 403
+    assert call(base, '/api/atms/ATM01/fill', {'note': 20, 'pieces': 5}, tok(base, 'tst-teller'))[0] == 403
+    assert call(base, '/api/atms/notes', {'notes': '20,50'}, tok(base, 'tst-teller'))[0] == 403
 
 
 def test_the_page_of_the_atm(base):
@@ -201,3 +210,60 @@ def test_a_pin_to_many_cards(base, conn):
     mine = [x for x in rows if x['id'] == k][0]
     assert len(mine['pin']) == 4
     login(base, {'pan': pan, 'pin': mine['pin']})
+
+
+def cassettes(base, code='ATM01'):
+    return {k['note']: k['pieces'] for m in ok(base, '/api/atms')['atms'] if m['code'] == code for k in m['cassettes']}
+
+
+def test_the_notes_of_a_withdrawal(base):
+    a = open_account(base, 2000)
+    card = new_card(base, a)
+    t = login(base, card)
+    s, r = atm(base, 'ATM01', 'options', {'amount': 300}, t)
+    assert s == 200 and [o['notes'] for o in r['options']] == [
+        {'50': 6}, {'50': 4, '20': 5}, {'50': 2, '20': 10}, {'20': 15}]
+    assert [o['pieces'] for o in r['options']] == [6, 9, 12, 15]
+    s, r = atm(base, 'ATM01', 'options', {'amount': 30}, t)
+    assert s == 400 and r['error'] == 'BK-138' and '20' in r['message'] and '50' in r['message']
+    before = cassettes(base)
+    s, r = atm(base, 'ATM01', 'withdraw', {'amount': 300, 'notes': {'50': 2, '20': 10}}, t)
+    assert s == 200 and r['notes'] == {'50': 2, '20': 10}
+    after = cassettes(base)
+    assert (before[50] - after[50], before[20] - after[20]) == (2, 10)
+    for notes, code in (({'50': 1, '20': 5}, 'BK-138'),            # 150, not 200
+                        ({'10': 20}, 'BK-138'),                    # no notes of 10
+                        ({'50': 2, '20': 'x'}, 'bad_notes'),
+                        ('50:2;20:5', 'BK-138')):
+        s, r = atm(base, 'ATM01', 'withdraw', {'amount': 200, 'notes': notes}, t)
+        assert s == 400 and r['error'] == code, (notes, r)
+    assert ok(base, '/api/check') == []
+
+
+def test_the_notes_are_a_setting(base, conn):
+    a = open_account(base, 2000)
+    card = new_card(base, a)
+    try:
+        r = ok(base, '/api/atms/notes', {'notes': '50, 10,20', 'max_notes': 5}, 'tst-manager')
+        assert r['notes'] == [50, 20, 10] and r['max_notes'] == 5
+        assert cassettes(base)[10] == 0                              # a new cassette, empty
+        t = login(base, card)
+        assert atm(base, 'ATM01', 'options', {'amount': 30}, t)[0] == 400
+        ok(base, '/api/atms/ATM01/fill', {'note': 10, 'pieces': 100}, 'tst-manager')
+        s, r = atm(base, 'ATM01', 'options', {'amount': 30}, t)
+        assert s == 200 and r['options'][0]['notes'] == {'20': 1, '10': 1}
+        assert all(o['pieces'] <= 5 for o in atm(base, 'ATM01', 'options', {'amount': 200}, t)[1]['options'])
+        assert atm(base, 'ATM01', 'options', {'amount': 300}, t)[0] == 400    # 6 x 50 at the fewest
+        s, r = atm(base, 'ATM01', 'withdraw', {'amount': 120, 'notes': {'20': 6}}, t)
+        assert s == 400 and r['error'] == 'BK-138' and '5 χαρτονομίσματα' in r['message']
+        assert atm(base, 'ATM01', 'withdraw', {'amount': 30}, t)[1]['notes'] == {'20': 1, '10': 1}
+        s, r = call(base, '/api/atms/notes', {'notes': '20,50'}, tok(base, 'tst-manager'))
+        assert s == 400 and r['error'] == 'BK-140' and 'ATM01' in r['message']     # its cassette of 10 not empty
+        for x in ('20,30', '20,20', 'a,b'):
+            assert call(base, '/api/atms/notes', {'notes': x}, tok(base, 'tst-manager'))[1]['error'] == 'BK-140'
+    finally:
+        ok(base, '/api/atms/ATM01/fill', {'note': 10, 'pieces': -cassettes(base)[10]}, 'tst-manager') \
+            if cassettes(base).get(10) else None
+        ok(base, '/api/atms/notes', {'notes': '20,50', 'max_notes': 40}, 'tst-manager')
+    assert 10 not in cassettes(base)
+    assert ok(base, '/api/check') == []

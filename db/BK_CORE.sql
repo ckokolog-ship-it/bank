@@ -101,11 +101,17 @@ create or replace package bk_core as
   -- the account of a card that may be used now (active, not expired, its account not closed)
   function card_account(p_card_id number) return number;
 
-  -- the ATMs: their cash (filled or taken out by the bank); a withdrawal (in tens: notes of 10, 20, 50 €;
-  -- within the cash of the ATM), a deposit, a transfer to an account of the bank, by a card: the channel ATM,
-  -- so within the rules of its account for the ATM. Their entry back
-  procedure atm_cash(p_atm_code varchar2, p_amount number);
-  function atm_withdraw(p_atm_code varchar2, p_card_id number, p_amount number) return number;
+  -- the ATMs. The notes they give: the setting ATM_NOTES ('20,50'), each ATM a cassette of each; the most notes
+  -- of one withdrawal: ATM_MAX_NOTES (40). A cassette filled (+ pieces) or emptied (-) by the bank
+  procedure set_atm_notes(p_notes varchar2, p_max_notes number default null);
+  procedure atm_fill(p_atm_code varchar2, p_note number, p_pieces number);
+  -- the ways an ATM can give an amount now, with the notes in its cassettes: up to 4, the fewest notes first,
+  -- each as '50:4,20:5', separated by ';' (null: none)
+  function atm_options(p_atm_code varchar2, p_amount number) return varchar2;
+  -- a withdrawal (its notes: p_notes, as '50:4,20:5'; null: the first of atm_options), a deposit (to the bin of
+  -- the ATM), a transfer to an account of the bank, by a card: the channel ATM, so within the rules of its
+  -- account for the ATM. Their entry back
+  function atm_withdraw(p_atm_code varchar2, p_card_id number, p_amount number, p_notes varchar2 default null) return number;
   function atm_deposit(p_atm_code varchar2, p_card_id number, p_amount number) return number;
   function atm_transfer(p_atm_code varchar2, p_card_id number, p_to_iban varchar2, p_amount number) return number;
 
@@ -1050,35 +1056,219 @@ create or replace package body bk_core as
       fail(37, 'Δεν υπάρχει ATM ' || p_atm_code);
   end;
 
-  procedure atm_cash(p_atm_code varchar2, p_amount number) is
-    m bk_atm%rowtype;
+  -- the notes the ATMs give, the highest first (the setting ATM_NOTES)
+  function atm_notes return sys.odcinumberlist is
+    s varchar2(400) := nvl(setting('ATM_NOTES'), '20,50');       -- (not in SQL: PLS-00231)
+    l sys.odcinumberlist;
   begin
-    select * into m from bk_atm where code = upper(p_atm_code) for update;
-    if p_amount is null or p_amount = 0 or mod(p_amount, 10) <> 0 then
-      fail(38, 'Τα μετρητά ενός ATM: σε δεκάδες (χαρτονομίσματα των 10, 20, 50 €)');
-    end if;
-    if m.cash + p_amount < 0 then
-      fail(39, 'Το ATM ' || m.code || ' έχει ' || money_text(m.cash));
-    end if;
-    update bk_atm set cash = cash + p_amount where id = m.id;
-  exception
-    when no_data_found then
-      fail(37, 'Δεν υπάρχει ATM ' || p_atm_code);
+    select to_number(trim(regexp_substr(s, '[^,]+', 1, level))) bulk collect into l
+    from dual connect by level <= regexp_count(s, ',') + 1
+    order by 1 desc;
+    return l;
   end;
 
-  function atm_withdraw(p_atm_code varchar2, p_card_id number, p_amount number) return number is
+  function notes_text(p sys.odcinumberlist) return varchar2 is
+    v varchar2(200);
+  begin
+    for i in 1 .. p.count loop
+      v := v || case when i = p.count and i > 1 then ' και ' when i > 1 then ', ' end || p(i);
+    end loop;
+    return v || ' €';
+  end;
+
+  procedure set_atm_notes(p_notes varchar2, p_max_notes number default null) is
+    l sys.odcinumberlist;
+    s varchar2(400) := regexp_replace(p_notes, '\s', '');
+    n number;
+    v varchar2(400);
+  begin
+    if s is null or not regexp_like(s, '^[0-9]+(,[0-9]+)*$') then
+      fail(40, 'Τα χαρτονομίσματα των ATM: τιμές σε €, με κόμμα (π.χ. 20,50)');
+    end if;
+    select to_number(regexp_substr(s, '[^,]+', 1, level)) bulk collect into l
+    from dual connect by level <= regexp_count(s, ',') + 1;
+    for i in 1 .. l.count loop
+      if l(i) not in (5, 10, 20, 50, 100, 200, 500) then
+        fail(40, 'Δεν υπάρχει χαρτονόμισμα των ' || l(i) || ' €: 5, 10, 20, 50, 100, 200, 500');
+      end if;
+      for j in 1 .. i - 1 loop
+        if l(j) = l(i) then
+          fail(40, 'Το χαρτονόμισμα των ' || l(i) || ' € δύο φορές');
+        end if;
+      end loop;
+    end loop;
+    if p_max_notes is not null and (p_max_notes < 1 or p_max_notes > 200 or p_max_notes <> trunc(p_max_notes)) then
+      fail(40, 'Τα περισσότερα χαρτονομίσματα μιας ανάληψης: από 1 ως 200');
+    end if;
+    -- a note no more: its cassettes empty first
+    for c in (select m.code, n.note, n.pieces from bk_atm_note n join bk_atm m on m.id = n.atm_id
+              where n.pieces > 0 and n.note not in (select column_value from table(l)) order by m.code) loop
+      fail(40, 'Πρώτα αδειάζουν οι κασέτες των ' || c.note || ' € (' || c.code || ': ' || c.pieces || ' χαρτονομίσματα)');
+    end loop;
+    delete from bk_atm_note where note not in (select column_value from table(l));
+    insert into bk_atm_note (atm_id, note, pieces)
+    select m.id, x.column_value, 0 from bk_atm m cross join table(l) x
+    where not exists (select 1 from bk_atm_note n where n.atm_id = m.id and n.note = x.column_value);
+    select listagg(column_value, ',') within group (order by column_value) into v from table(l);
+    merge into bk_setting t using (select 'ATM_NOTES' name, v value from dual) x on (t.name = x.name)
+    when matched then update set t.value = x.value when not matched then insert (name, value) values (x.name, x.value);
+    if p_max_notes is not null then
+      merge into bk_setting t using (select 'ATM_MAX_NOTES' name, to_char(p_max_notes) value from dual) x on (t.name = x.name)
+      when matched then update set t.value = x.value when not matched then insert (name, value) values (x.name, x.value);
+    end if;
+    n := l.count;
+  end;
+
+  procedure atm_fill(p_atm_code varchar2, p_note number, p_pieces number) is
+    m bk_atm%rowtype;
+    have number;
+  begin
+    begin
+      select * into m from bk_atm where code = upper(p_atm_code) for update;
+    exception
+      when no_data_found then fail(37, 'Δεν υπάρχει ATM ' || p_atm_code);
+    end;
+    begin
+      select pieces into have from bk_atm_note where atm_id = m.id and note = p_note;
+    exception
+      when no_data_found then fail(40, 'Το ATM ' || m.code || ' δεν έχει κασέτα για χαρτονομίσματα των ' || p_note || ' €');
+    end;
+    if p_pieces is null or p_pieces = 0 or p_pieces <> trunc(p_pieces) then
+      fail(38, 'Χαρτονομίσματα: ένας ακέραιος αριθμός (αρνητικός: αφαίρεση)');
+    end if;
+    if have + p_pieces < 0 then
+      fail(39, 'Η κασέτα των ' || p_note || ' € του ' || m.code || ' έχει ' || have || ' χαρτονομίσματα');
+    end if;
+    update bk_atm_note set pieces = pieces + p_pieces where atm_id = m.id and note = p_note;
+    update bk_atm set cash = cash + p_note * p_pieces where id = m.id;
+  end;
+
+  -- the ways to give p_rem with the notes p_d(p_i ..) (p_av of each), at most p_max notes in all
+  procedure combos(p_d sys.odcinumberlist, p_av sys.odcinumberlist, p_i pls_integer, p_rem number, p_spec varchar2,
+                   p_n number, p_max number, o_spec in out nocopy sys.odcivarchar2list, o_n in out nocopy sys.odcinumberlist,
+                   o_steps in out nocopy number) is
+  begin
+    o_steps := o_steps + 1;
+    if o_spec.count >= 200 or o_steps > 20000 then
+      return;
+    end if;
+    if p_rem = 0 then
+      o_spec.extend;
+      o_spec(o_spec.count) := p_spec;
+      o_n.extend;
+      o_n(o_n.count) := p_n;
+      return;
+    end if;
+    if p_i > p_d.count then
+      return;
+    end if;
+    for k in reverse 0 .. least(p_av(p_i), trunc(p_rem / p_d(p_i)), p_max - p_n) loop
+      combos(p_d, p_av, p_i + 1, p_rem - k * p_d(p_i),
+             case when k > 0 then p_spec || case when p_spec is not null then ',' end || p_d(p_i) || ':' || k else p_spec end,
+             p_n + k, p_max, o_spec, o_n, o_steps);
+    end loop;
+  end;
+
+  function atm_options(p_atm_code varchar2, p_amount number) return varchar2 is
+    m bk_atm%rowtype := atm_row(p_atm_code);
+    d sys.odcinumberlist := atm_notes;
+    av sys.odcinumberlist := sys.odcinumberlist();
+    sp sys.odcivarchar2list := sys.odcivarchar2list();
+    nn sys.odcinumberlist := sys.odcinumberlist();
+    steps number := 0;
+    mx number := to_number(nvl(setting('ATM_MAX_NOTES'), '40'));
+    idx sys.odcinumberlist := sys.odcinumberlist();
+    t number;
+    v varchar2(1000);
+    pick number;
+  begin
+    if p_amount is null or p_amount <= 0 or p_amount <> trunc(p_amount) then
+      return null;
+    end if;
+    av.extend(d.count);
+    for i in 1 .. d.count loop
+      select nvl(max(pieces), 0) into av(i) from bk_atm_note where atm_id = m.id and note = d(i);
+    end loop;
+    combos(d, av, 1, p_amount, null, 0, mx, sp, nn, steps);
+    if sp.count = 0 then
+      return null;
+    end if;
+    -- the fewest notes first (as they were found: the higher notes first, for the same number)
+    idx.extend(sp.count);
+    for i in 1 .. sp.count loop
+      idx(i) := i;
+    end loop;
+    for i in 2 .. idx.count loop
+      for j in reverse 1 .. i - 1 loop
+        exit when nn(idx(j)) <= nn(idx(j + 1));
+        t := idx(j); idx(j) := idx(j + 1); idx(j + 1) := t;
+      end loop;
+    end loop;
+    -- up to 4: the fewest notes, the most, and between them evenly
+    for j in 0 .. least(idx.count, 4) - 1 loop
+      pick := case when idx.count <= 4 then j + 1 else round(j * (idx.count - 1) / 3) + 1 end;
+      v := v || case when j > 0 then ';' end || sp(idx(pick));
+    end loop;
+    return v;
+  end;
+
+  function atm_withdraw(p_atm_code varchar2, p_card_id number, p_amount number, p_notes varchar2 default null) return number is
     m bk_atm%rowtype := atm_row(p_atm_code, true);
     a number := card_account(p_card_id);
+    d sys.odcinumberlist := atm_notes;
+    spec varchar2(400) := regexp_replace(p_notes, '\s', '');
+    mx number := to_number(nvl(setting('ATM_MAX_NOTES'), '40'));
+    note_ number;
+    pcs number;
+    have number;
+    total number := 0;
+    cnt number := 0;
+    seen varchar2(400) := ',';
     e number;
   begin
     amount_ok(p_amount);
-    if mod(p_amount, 10) <> 0 then
-      fail(38, 'Το ATM δίνει χαρτονομίσματα των 10, 20 και 50 €: ένα ποσό σε δεκάδες');
-    end if;
     if m.cash < p_amount then
-      fail(39, 'Το ATM δεν έχει αρκετά μετρητά: ως ' || money_text(trunc(m.cash / 10) * 10));
+      fail(39, 'Το ATM δεν έχει αρκετά μετρητά: ως ' || money_text(m.cash));
+    end if;
+    if spec is null then
+      spec := regexp_substr(atm_options(p_atm_code, p_amount), '[^;]+', 1, 1);
+      if spec is null then
+        fail(38, 'Το ATM δεν μπορεί να δώσει ' || money_text(p_amount) || ' με χαρτονομίσματα των ' || notes_text(d));
+      end if;
+    end if;
+    if not regexp_like(spec, '^[0-9]+:[0-9]+(,[0-9]+:[0-9]+)*$') then
+      fail(38, 'Τα χαρτονομίσματα: χαρτονόμισμα:πλήθος, με κόμμα (π.χ. 50:4,20:5)');
+    end if;
+    for i in 1 .. regexp_count(spec, ',') + 1 loop
+      note_ := to_number(regexp_substr(regexp_substr(spec, '[^,]+', 1, i), '[0-9]+', 1, 1));
+      pcs := to_number(regexp_substr(regexp_substr(spec, '[^,]+', 1, i), '[0-9]+', 1, 2));
+      if instr(seen, ',' || note_ || ',') > 0 then
+        fail(38, 'Το χαρτονόμισμα των ' || note_ || ' € δύο φορές');
+      end if;
+      seen := seen || note_ || ',';
+      select count(*) into have from table(d) where column_value = note_;
+      if have = 0 then
+        fail(38, 'Το ATM δίνει χαρτονομίσματα των ' || notes_text(d) || ', όχι των ' || note_ || ' €');
+      end if;
+      select nvl(max(pieces), 0) into have from bk_atm_note where atm_id = m.id and note = note_;
+      if pcs > have then
+        fail(39, 'Το ATM έχει ' || have || ' χαρτονομίσματα των ' || note_ || ' €');
+      end if;
+      total := total + note_ * pcs;
+      cnt := cnt + pcs;
+    end loop;
+    if total <> p_amount then
+      fail(38, 'Τα χαρτονομίσματα κάνουν ' || money_text(total) || ', όχι ' || money_text(p_amount));
+    end if;
+    if cnt > mx then
+      fail(38, 'Ως ' || mx || ' χαρτονομίσματα σε μία ανάληψη');
     end if;
     e := withdraw(a, p_amount, 'Ανάληψη ATM ' || m.code || ' ' || m.name, null, 'ATM');
+    for i in 1 .. regexp_count(spec, ',') + 1 loop
+      note_ := to_number(regexp_substr(regexp_substr(spec, '[^,]+', 1, i), '[0-9]+', 1, 1));
+      pcs := to_number(regexp_substr(regexp_substr(spec, '[^,]+', 1, i), '[0-9]+', 1, 2));
+      update bk_atm_note set pieces = pieces - pcs where atm_id = m.id and note = note_;
+    end loop;
     update bk_atm set cash = cash - p_amount where id = m.id;
     return e;
   end;
@@ -1093,7 +1283,7 @@ create or replace package body bk_core as
       fail(38, 'Το ATM δέχεται χαρτονομίσματα: ένα ποσό σε πεντάδες');
     end if;
     e := deposit(a, p_amount, 'Κατάθεση ATM ' || m.code || ' ' || m.name, null, 'ATM');
-    update bk_atm set cash = cash + p_amount where id = m.id;
+    update bk_atm set deposits = deposits + p_amount where id = m.id;       -- (its bin: not given out again)
     return e;
   end;
 

@@ -24,10 +24,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <pre>
  *   GET  /api/atm/                       the ATMs that work
- *   GET  /api/atm/{code}                 one: its name, if it has cash
+ *   GET  /api/atm/{code}                 one: its name, if it has cash, the notes it gives (the highest first)
  *   POST /api/atm/{code}/login {pan, pin}   its token, the holder, the account
  *   POST /api/atm/{code}/balance         balance, available, what may be withdrawn today
- *   POST /api/atm/{code}/withdraw {amount}    the notes, the receipt
+ *   POST /api/atm/{code}/options {amount}    the ways the ATM can give it now (its notes): up to 4, the fewest
+ *                                        notes first
+ *   POST /api/atm/{code}/withdraw {amount, notes}   notes: {"50": 4, "20": 5} (none: the first way); the receipt
  *   POST /api/atm/{code}/deposit {amount}
  *   POST /api/atm/{code}/transfer {iban, amount}   to an account of the bank
  *   POST /api/atm/{code}/statement       the last 10 moves
@@ -155,10 +157,12 @@ final class Atm {
         String code = p[0].toUpperCase();
         if (get && p.length == 1) {
             Map<String, Object> r = Db.row(c, "select code, name, address, active, "
-                    + "case when cash >= 10 then 'Y' else 'N' end cash_ok from bk_atm where code = ?", code);
+                    + "case when cash > 0 then 'Y' else 'N' end cash_ok from bk_atm where code = ?", code);
             if (r == null) {
                 throw new Http.Fail(404, "not_found", "Δεν υπάρχει ATM " + code);
             }
+            r.put("notes", notes(c));
+            r.put("max_notes", maxNotes(c));
             return r;
         }
         if (get || p.length != 2) {
@@ -186,11 +190,36 @@ final class Atm {
             case "balance" -> {
                 return balance(c, acc, code);
             }
+            case "options" -> {
+                BigDecimal amount = amount(in);
+                String o = (String) Db.row(c, "select bk_core.atm_options(?, ?) o from dual", code, amount).get("o");
+                if (o == null) {
+                    throw new Http.Fail(400, "BK-138", cannot(c, amount));
+                }
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("amount", amount);
+                List<Map<String, Object>> ways = new java.util.ArrayList<>();
+                for (String spec : o.split(";")) {
+                    Map<String, Object> w = new LinkedHashMap<>();
+                    Map<String, Integer> n = parse(spec);
+                    w.put("notes", n);
+                    w.put("pieces", n.values().stream().mapToInt(Integer::intValue).sum());
+                    ways.add(w);
+                }
+                r.put("options", ways);
+                r.put("max_notes", maxNotes(c));
+                return r;
+            }
             case "withdraw" -> {
                 BigDecimal amount = amount(in);
-                long e = Db.fn(c, "bk_core.atm_withdraw(?, ?, ?)", code, s.cardId, amount);
+                String spec = spec(in.get("notes"));
+                if (spec == null) {          // the first way (none: the error of atm_withdraw, its cash first)
+                    spec = (String) Db.row(c, "select regexp_substr(bk_core.atm_options(?, ?), '[^;]+') o from dual",
+                            code, amount).get("o");
+                }
+                long e = Db.fn(c, "bk_core.atm_withdraw(?, ?, ?, ?)", code, s.cardId, amount, spec);
                 Map<String, Object> r = receipt(c, e, acc, code);
-                r.put("notes", notes(amount.intValue()));
+                r.put("notes", parse(spec));
                 return r;
             }
             case "deposit" -> {
@@ -329,16 +358,74 @@ final class Atm {
         return r;
     }
 
-    /** the notes of a withdrawal: as many 50 as possible, then 20, then 10 */
-    static Map<String, Integer> notes(int amount) {
+    /** the notes the ATMs give (the setting ATM_NOTES), the highest first */
+    static List<Integer> notes(Connection c) throws SQLException {
+        String v = (String) Db.row(c, "select nvl(max(value), '20,50') v from bk_setting where name = 'ATM_NOTES'").get("v");
+        List<Integer> l = new java.util.ArrayList<>();
+        for (String x : v.split(",")) {
+            l.add(Integer.parseInt(x.trim()));
+        }
+        l.sort(java.util.Comparator.reverseOrder());
+        return l;
+    }
+
+    static int maxNotes(Connection c) throws SQLException {
+        Object v = Db.row(c, "select nvl(max(value), '40') v from bk_setting where name = 'ATM_MAX_NOTES'").get("v");
+        return Integer.parseInt(String.valueOf(v));
+    }
+
+    private static String cannot(Connection c, BigDecimal amount) throws SQLException {
+        List<Integer> n = notes(c);
+        StringBuilder s = new StringBuilder();
+        for (int i = 0; i < n.size(); i++) {
+            s.append(i == 0 ? "" : i == n.size() - 1 ? " και " : ", ").append(n.get(i));
+        }
+        return "Το ATM δεν μπορεί να δώσει " + amount.stripTrailingZeros().toPlainString()
+                + " € με χαρτονομίσματα των " + s + " € (ή δεν έχει τόσα τώρα)";
+    }
+
+    /** '50:4,20:5' as {"50": 4, "20": 5} */
+    static Map<String, Integer> parse(String spec) {
         Map<String, Integer> n = new LinkedHashMap<>();
-        int left = amount;
-        for (int v : List.of(50, 20, 10)) {
-            if (left / v > 0) {
-                n.put(String.valueOf(v), left / v);
-            }
-            left %= v;
+        for (String p : spec.split(",")) {
+            String[] kv = p.split(":");
+            n.put(kv[0], Integer.parseInt(kv[1]));
         }
         return n;
+    }
+
+    /** the notes asked: {"50": 4, "20": 5} (or '50:4,20:5') as '50:4,20:5' (a note of 0 pieces left out); null: none */
+    @SuppressWarnings("unchecked")
+    static String spec(Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof String s) {
+            return s.isBlank() ? null : s.replace(" ", "");
+        }
+        if (!(v instanceof Map<?, ?> m)) {
+            throw new Http.Fail(400, "bad_notes", "Τα χαρτονομίσματα: {\"50\": 4, \"20\": 5}");
+        }
+        StringBuilder s = new StringBuilder();
+        for (Map.Entry<String, Object> e : ((Map<String, Object>) m).entrySet()) {
+            long k;
+            long n;
+            try {
+                k = new BigDecimal(e.getKey()).longValueExact();
+                n = new BigDecimal(String.valueOf(e.getValue())).longValueExact();
+            } catch (NumberFormatException | ArithmeticException x) {
+                throw new Http.Fail(400, "bad_notes", "Τα χαρτονομίσματα: ακέραιοι αριθμοί");
+            }
+            if (n < 0) {
+                throw new Http.Fail(400, "bad_notes", "Τα χαρτονομίσματα: από 0 και πάνω");
+            }
+            if (n > 0) {
+                s.append(s.length() == 0 ? "" : ",").append(k).append(':').append(n);
+            }
+        }
+        if (s.length() == 0) {
+            throw new Http.Fail(400, "BK-138", "Κανένα χαρτονόμισμα");
+        }
+        return s.toString();
     }
 }

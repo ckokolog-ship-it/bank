@@ -15,7 +15,9 @@ where not exists (select 1 from bk_gl g where g.code = v.code);
 insert into bk_setting (name, value)
 select v.name, v.value from (values
   ('BANK_CODE', '999'),           -- (no real bank: 999)
-  ('BRANCH_CODE', '0001')
+  ('BRANCH_CODE', '0001'),
+  ('ATM_NOTES', '20,50'),         -- the notes the ATMs give (€)
+  ('ATM_MAX_NOTES', '40')         -- the most notes of one withdrawal
 ) v (name, value)
 where not exists (select 1 from bk_setting s where s.name = v.name);
 
@@ -47,4 +49,14 @@ select v.code, v.name, v.address, v.cash from (values
   ('ATM03', 'Θεσσαλονίκη λιμάνι',  'Λεωφόρος Νίκης 30, Θεσσαλονίκη', 40000)
 ) v (code, name, address, cash)
 where not exists (select 1 from bk_atm a where a.code = v.code);
+
+-- their cassettes (as their cash): of 50 € and of 20 €
+insert into bk_atm_note (atm_id, note, pieces)
+select a.id, v.note, v.pieces from (values
+  ('ATM01', 50, 300), ('ATM01', 20, 750),
+  ('ATM02', 50, 600), ('ATM02', 20, 1000),
+  ('ATM03', 50, 400), ('ATM03', 20, 1000)
+) v (code, note, pieces)
+join bk_atm a on a.code = v.code
+where not exists (select 1 from bk_atm_note n where n.atm_id = a.id);
 commit;

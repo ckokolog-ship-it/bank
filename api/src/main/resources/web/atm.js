@@ -186,15 +186,55 @@ async function balance() {
   } catch (e) { error(e); }
 }
 
+// the notes of the ATM, as words: 'των 50 και 20 €'; a way to give an amount: '4 × 50 € + 5 × 20 €'
+const notesText = () => S.atm.notes.join(S.atm.notes.length === 2 ? ' και ' : ', ').replace(/, (\d+)$/, ' και $1') + ' €';
+const wayText = (n) => Object.entries(n).sort((a, b) => b[0] - a[0]).map(([v, c]) => c + ' × ' + v + ' €').join(' + ');
+
 async function withdraw() {
   busy();
   let today = null;
   try { today = (await op('balance')).withdraw_today; } catch (e) { return error(e); }
-  const go = (a) => () => doWithdraw(a);
+  const go = (a) => () => chooseNotes(a);
   show({ title: 'Ανάληψη', sub: 'Μπορείτε σήμερα ως ' + money(today),
     left: [['20 €', go(20)], ['50 €', go(50)], ['100 €', go(100)], ['200 €', go(200)]],
-    right: [['300 €', go(300)], ['400 €', go(400)], ['Άλλο ποσό', () => amount('Ανάληψη: άλλο ποσό', 'σε δεκάδες: χαρτονομίσματα 10, 20, 50 €', doWithdraw)],
+    right: [['300 €', go(300)], ['400 €', go(400)], ['Άλλο ποσό', () => amount('Ανάληψη: άλλο ποσό', 'χαρτονομίσματα των ' + notesText(), chooseNotes)],
       ['Πίσω', menu]] });
+}
+
+// the notes of an amount: the ways the ATM proposes (on the left keys), or another way of the customer
+async function chooseNotes(a) {
+  busy();
+  let r;
+  try { r = await op('options', { amount: a }); } catch (e) { return error(e, withdraw); }
+  const left = r.options.map((o) => [wayText(o.notes), () => doWithdraw(a, o.notes)]);
+  show({ title: 'Ανάληψη ' + money(a), sub: 'Πώς θέλετε τα χαρτονομίσματα;', left,
+    right: [S.atm.notes.length > 1 ? ['Άλλος συνδυασμός', () => customNotes(a, 0, {})] : null, null, null, ['Πίσω', withdraw]],
+    ok: () => doWithdraw(a, r.options[0].notes), cancel: withdraw });
+}
+
+// another way: how many of each note, the highest first; the lowest: what is left
+function customNotes(a, i, chosen) {
+  const notes = S.atm.notes;
+  const left = a - Object.entries(chosen).reduce((s, [v, c]) => s + v * c, 0);
+  if (i === notes.length - 1) {
+    const low = notes[i];
+    if (left < 0 || left % low !== 0) {
+      return error(new Error('Μένουν ' + money(left) + ': δεν δίνονται σε χαρτονομίσματα των ' + low + ' €'), () => customNotes(a, 0, {}));
+    }
+    const all = Object.assign({}, chosen, left > 0 ? { [low]: left / low } : {});
+    const go = () => doWithdraw(a, all);
+    return show({ title: 'Ανάληψη ' + money(a), sub: 'Τα χαρτονομίσματά σας', body: [h('div', { class: 'msg' }, wayText(all))],
+      left: [null, null, null, ['Αλλαγή', () => customNotes(a, 0, {})]], right: [null, null, null, ['Εντάξει', go]], ok: go,
+      cancel: () => chooseNotes(a) });
+  }
+  const v = notes[i];
+  entry({ title: 'Πόσα των ' + v + ' €;', sub: 'Ανάληψη ' + money(a) + ' · μένουν ' + money(left), max: 3,
+    note: 'και Εντάξει (0: κανένα)', draw: (x) => (x || '0') + ' × ' + v + ' €', cancel: () => chooseNotes(a),
+    done: (x) => {
+      const n = Number(x || 0);
+      if (n * v > left) return;
+      customNotes(a, i + 1, Object.assign({}, chosen, n > 0 ? { [v]: n } : {}));
+    } });
 }
 
 function amount(title, note, done) {
@@ -202,14 +242,15 @@ function amount(title, note, done) {
     cancel: menu, done: (v) => { if (Number(v) > 0) done(Number(v)); } });
 }
 
-async function doWithdraw(a) {
+async function doWithdraw(a, want) {
   busy('Η ανάληψη γίνεται…');
   try {
-    const r = await op('withdraw', { amount: a });
+    const r = await op('withdraw', { amount: a, notes: want });
     notes(r.notes);
-    printReceipt('ΑΝΑΛΗΨΗ', r, [['Ποσό', money(a)], r.fee > 0 ? ['Προμήθεια', money(r.fee)] : null,
+    printReceipt('ΑΝΑΛΗΨΗ', r, [['Ποσό', money(a)], ...Object.entries(r.notes).sort((x, y) => y[0] - x[0]).map(([v, c]) => ['  ' + c + ' × ' + v + ' €', money(v * c)]),
+      r.fee > 0 ? ['Προμήθεια', money(r.fee)] : null,
       ['Υπόλοιπο', money(r.balance)], ['Διαθέσιμο', money(r.available)]]);
-    another('Πάρτε τα χρήματά σας', [h('div', { class: 'big' }, money(a)),
+    another('Πάρτε τα χρήματά σας', [h('div', { class: 'big' }, money(a)), h('div', { class: 'msg' }, wayText(r.notes)),
       r.fee > 0 ? h('div', { class: 'msg' }, 'Προμήθεια ' + money(r.fee)) : null,
       h('div', { class: 'msg' }, 'Υπόλοιπο ' + money(r.balance))]);
   } catch (e) { error(e, withdraw); }
