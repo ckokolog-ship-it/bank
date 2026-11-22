@@ -120,7 +120,23 @@ create table if not exists bk_line (
   constraint bk_line_amount_ck check ((debit > 0 and credit = 0) or (credit > 0 and debit = 0))
 );
 create index if not exists bk_line_entry_ix on bk_line (entry_id);
-create index if not exists bk_line_account_ix on bk_line (account_id, entry_id);
+-- the value date of the line (that of its entry, BK_CHECK): the interest reads the lines of an account after a
+-- day by it, without the rest of its history
+declare
+  n number;
+begin
+  select count(*) into n from user_tab_cols where table_name = 'BK_LINE' and column_name = 'VALUE_DATE';
+  if n = 0 then
+    execute immediate 'alter table bk_line add (value_date date)';
+    execute immediate 'update bk_line l set value_date = (select e.value_date from bk_entry e where e.id = l.entry_id)';
+    commit;
+  end if;
+end;
+/
+-- (the lines of an account: by it; the index of before on (account_id, entry_id) no more: one index less to
+-- write, for each line)
+create index if not exists bk_line_value_ix on bk_line (account_id, value_date);
+drop index if exists bk_line_account_ix;
 
 -- the channel of an entry (BR the counter of a branch, WEB e-banking, ATM, SYS the bank itself: interest) and
 -- the movement of each line of a customer (DEP deposit, WDR withdrawal, TRO transfer to another account of the
@@ -245,19 +261,67 @@ create table if not exists bk_card (
 );
 create index if not exists bk_card_account_ix on bk_card (account_id);
 
--- the interest of every day of every account: its balance by value date at the end of the day, the rate
--- (OD_RATE when below 0), the days it counts (1; 30/360: 0 the 31st, 3 or 2 the end of February) and the
--- divisor of its year; INTEREST = BALANCE x RATE / 100 x DAYS / YEAR_DAYS
+-- the interest of each account, by stretches of days (DAY_FROM .. DAY_TO): in a stretch its balance by value date
+-- and its rate stay the same (a new stretch: a movement with its value date, a new rate). BALANCE, RATE (OD_RATE
+-- when below 0), DAYS the days it counts (each day 1; 30/360: 0 the 31st, 3 or 2 the end of February) and
+-- YEAR_DAYS the divisor of its year. INTEREST: the interest of each day (BALANCE x RATE / 100 x its days /
+-- YEAR_DAYS) rounded to 6 decimals, summed: the same, to the last decimal, as day by day
 create table if not exists bk_accrual (
   account_id  number        not null constraint bk_accrual_account_fk references bk_account,
-  day         date          not null,
+  day_from    date          not null,
+  day_to      date          not null,
   balance     number(18,2)  not null,
   rate        number(7,4)   not null,
-  days        number(2)     not null,
+  days        number(6)     not null,
   year_days   number(3)     not null,
   interest    number(18,6)  not null,
-  constraint bk_accrual_pk primary key (account_id, day)
+  constraint bk_accrual_pk primary key (account_id, day_from),
+  constraint bk_accrual_days_ck check (day_to >= day_from)
 );
+-- the stretches of one accrual, before they are written (for the accounts: their sum)
+create global temporary table if not exists bk_accrual_new (
+  account_id  number,
+  day_from    date,
+  day_to      date,
+  balance     number(18,2),
+  rate        number(7,4),
+  days        number(6),
+  year_days   number(3),
+  interest    number(18,6)
+) on commit delete rows;
+
+-- the capitalizations of one close of a day, before they are booked: the account, its interest rounded, its
+-- tax, the id of its entry
+create global temporary table if not exists bk_capital_new (
+  account_id  number,
+  gross       number(18,2),
+  tax         number(18,2),
+  tax_rate    number(5,2),
+  entry_id    number
+) on commit delete rows;
+
+-- the days (1990 .. 2100), each with the days it counts in 30/360 (D30: 0 the 31st, 3 or 2 the end of
+-- February, else 1) and how many days of each kind up to it (C1, C2, C3): the days of each kind in a stretch are
+-- the difference of its last day and of the day before its first
+create table if not exists bk_calendar (
+  day         date          constraint bk_calendar_pk primary key,
+  d30         number(1)     not null,
+  c1          number(6)     not null,
+  c2          number(6)     not null,
+  c3          number(6)     not null
+) organization index;
+insert into bk_calendar (day, d30, c1, c2, c3)
+select day, d30,
+       count(case d30 when 1 then 1 end) over (order by day),
+       count(case d30 when 2 then 1 end) over (order by day),
+       count(case d30 when 3 then 1 end) over (order by day)
+from (select day, case when to_char(day, 'DD') = '31' then 0
+                       when to_char(day, 'MM') = '02' and day = last_day(day) then 30 - to_number(to_char(day, 'DD')) + 1
+                       else 1 end d30
+      from (select date '1990-01-01' + level - 1 day from dual
+            connect by level <= date '2100-12-31' - date '1990-01-01' + 1))
+where not exists (select 1 from bk_calendar);
+commit;
 
 -- the interest capitalized: when, how much (GROSS: the accrued rounded; TAX withheld), by which entry
 create table if not exists bk_capital (
@@ -312,6 +376,11 @@ from bk_account a
 left join (select account_id, sum(interest) total from bk_accrual group by account_id) x on x.account_id = a.id
 left join (select account_id, sum(gross) total from bk_capital group by account_id) c on c.account_id = a.id
 where a.accrued <> nvl(x.total, 0) - nvl(c.total, 0)
+union all
+select 'LINE', to_char(l.id), 'value date ' || to_char(l.value_date, 'YYYY-MM-DD') || ', of its entry '
+       || to_char(e.value_date, 'YYYY-MM-DD')
+from bk_line l join bk_entry e on e.id = l.entry_id
+where l.value_date is null or l.value_date <> e.value_date
 union all
 select 'HOLDER', a.iban, 'primary holders ' || (select count(*) from bk_holder h where h.account_id = a.id and h.role = 'P')
 from bk_account a

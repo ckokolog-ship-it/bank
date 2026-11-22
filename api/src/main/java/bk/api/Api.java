@@ -38,7 +38,8 @@ import java.util.Map;
  *   POST /api/accounts/{id}/holders {customer_id}   POST /api/accounts/{id}/holders/{customer}/remove
  *   POST /api/accounts/{id}/status {status O|B}  (M)   .../od-limit {od_limit} (M)   .../close (M)
  *   GET  /api/accounts/{id}/statement?from=&to=  its moves, the balance before and after
- *   GET  /api/accounts/{id}/interest?from=&to=   the interest of each day and the capitalizations
+ *   GET  /api/accounts/{id}/interest?from=&to=   the interest by stretches (accrued first, up to the last day
+ *                                                closed) and the capitalizations
  *   GET  /api/accounts/{id}/limits               BK_LIMITS: what each move may do now, by channel, and the rules
  *   POST /api/movements {kind DEP|WDR|TRF|OUT|INC, account_id, to_account, iban, amount, descr, value_date, channel}
  *   GET  /api/entries/{id}                       an entry and its lines
@@ -430,12 +431,14 @@ final class Api {
         }
         long id = Http.id(p[1]);
         if (get && p.length == 2) {
+            accrue(c, id);
             return account(c, id);
         }
         if (get && is(p, "accounts", "*", "statement")) {
             return statement(c, id, q);
         }
         if (get && is(p, "accounts", "*", "interest")) {
+            accrue(c, id);
             return interest(c, id, q);
         }
         if (get && is(p, "accounts", "*", "limits")) {
@@ -482,6 +485,15 @@ final class Api {
             return account(c, id);
         }
         throw new Http.Fail(404, "not_found", "Δεν υπάρχει αυτή η κλήση");
+    }
+
+    /** its interest up to the last day closed (bk_core.accrue: nothing when it is there already) */
+    private static void accrue(Connection c, long id) throws SQLException {
+        Map<String, Object> a = Db.row(c, "select status, opened_on from bk_account where id = ?", id);
+        if (a != null && !"C".equals(a.get("status"))
+                && LocalDate.parse((String) a.get("opened_on")).isBefore(day(c))) {
+            Db.exec(c, "begin bk_core.accrue(?); end;", id);
+        }
     }
 
     private static Map<String, Object> account(Connection c, long id) throws SQLException {
@@ -538,12 +550,12 @@ final class Api {
         r.put("account", a);
         r.put("from", from.toString());
         r.put("to", to.toString());
-        r.put("days", Db.rows(c, "select day, balance, rate, days, year_days, interest from bk_accrual "
-                + "where account_id = ? and day between ? and ? order by day", id, from, to));
+        r.put("stretches", Db.rows(c, "select day_from, day_to, balance, rate, days, year_days, interest from bk_accrual "
+                + "where account_id = ? and day_to >= ? and day_from <= ? order by day_from", id, from, to));
         r.put("capitalized", Db.rows(c, "select day, gross, tax, gross - tax net, entry_id from bk_capital "
                 + "where account_id = ? and day between ? and ? order by day", id, from, to));
-        r.put("total", Db.row(c, "select nvl(sum(interest), 0) v from bk_accrual where account_id = ? and day between ? and ?",
-                id, from, to).get("v"));
+        r.put("total", Db.row(c, "select nvl(sum(interest), 0) v from bk_accrual where account_id = ? and day_to >= ? "
+                + "and day_from <= ?", id, from, to).get("v"));
         return r;
     }
 

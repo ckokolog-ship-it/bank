@@ -10,8 +10,15 @@
 --
 -- The business day (open_day): the day after the last one closed (BK_DAY), else the setting START_DAY. An
 -- entry is booked on it; its value date is that day or later (the interest of a day closed is not counted
--- again). close_day: the interest of every open account for the day (its balance by value date, the rate of
--- its tier, its day basis), and at the end of its period the interest capitalized with its tax.
+-- again).
+--
+-- The interest: by stretches of days (BK_ACCRUAL), not day by day. In a stretch the balance by value date and
+-- the rate of an account stay the same, so its interest is its days x the interest of one day (rounded to 6
+-- decimals as each day was): the same, to the last decimal, as day by day (interest_by_day: that way, for a
+-- check or an explanation). An account is accrued when it is needed (accrue): at the end of its period of
+-- capitalization (close_day: all of them at once, set-based, then capitalized with array DML), at its close,
+-- or to be shown; a day as any other close_day touches no account. Its balance by value date at the end of a
+-- day: its BALANCE less its lines with a later value date (BK_LINE.VALUE_DATE), never all of its history.
 
 create or replace package bk_core as
 
@@ -83,11 +90,18 @@ create or replace package bk_core as
   -- the opposite of an entry, booked on the business day (once; not of a reversal, not of interest)
   function reverse(p_entry_id number, p_descr varchar2 default null) return number;
 
-  -- the end of the business day: the interest of every open account for it, the capitalization at the end
-  -- of each period (and of an account closed), then the day closed. p_day: the business day (a check)
+  -- the end of the business day: at the end of a period of capitalization (a month: M; a quarter: Q; a year:
+  -- Y) the interest of the accounts of the products of that period accrued up to it and capitalized; then the
+  -- day closed. p_day: the business day (a check)
   procedure close_day(p_day date default null);
+  -- the interest of an account accrued up to a day closed (null: the last one): its stretches written, ACCRUED
+  -- and ACCRUED_TO with them. Again: nothing (or the days after)
+  procedure accrue(p_account_id number, p_day date default null);
   -- the interest accrued capitalized now (close_account does it): its entry, or null when nothing
   function capitalize(p_account_id number, p_day date) return number;
+  -- the interest of an account day by day, as it was counted before the stretches (each day its balance by
+  -- value date, its rate, its days): for a check of the stretches, or to explain them
+  function interest_by_day(p_account_id number, p_day_from date, p_day_to date) return number;
 
   -- the balance of an account by value date at the end of a day
   function value_balance(p_account_id number, p_day date) return number;
@@ -390,8 +404,9 @@ create or replace package body bk_core as
   procedure line(p_entry_id number, p_account_id number, p_gl_code varchar2, p_debit number, p_credit number,
                  p_op varchar2 default null) is
   begin
-    insert into bk_line (entry_id, account_id, gl_code, debit, credit, op)
-    values (p_entry_id, p_account_id, p_gl_code, nvl(p_debit, 0), nvl(p_credit, 0), p_op);
+    insert into bk_line (entry_id, account_id, gl_code, debit, credit, op, value_date)
+    values (p_entry_id, p_account_id, p_gl_code, nvl(p_debit, 0), nvl(p_credit, 0), p_op,
+            (select value_date from bk_entry where id = p_entry_id));
     if p_account_id is not null then
       update bk_account set balance = balance + nvl(p_credit, 0) - nvl(p_debit, 0) where id = p_account_id;
     end if;
@@ -840,15 +855,132 @@ create or replace package body bk_core as
     end if;
   end;
 
-  -- the last day of the period of capitalization of a day
-  function period_end(p_cap varchar2, p_day date) return boolean is
+  function int_descr(p_gross number, p_tax number, p_tax_rate number, p_day date) return varchar2 is
   begin
-    if p_day <> last_day(p_day) then
-      return false;
+    return case when p_gross > 0 then 'Τόκοι ' || to_char(p_day, 'MM/YYYY') || case when p_tax > 0 then ' (φόρος '
+                     || rtrim(rtrim(to_char(p_tax_rate, 'FM990D00', q'[NLS_NUMERIC_CHARACTERS=',.']'), '0'), ',') || '%)' end
+                else 'Χρεωστικοί τόκοι υπερανάληψης ' || to_char(p_day, 'MM/YYYY') end;
+  end;
+
+  -- the interest of the open accounts p_lo .. p_hi of the products capitalized every p_caps (M, Q, Y: any of
+  -- them) accrued up to p_day: their stretches after their ACCRUED_TO, in one statement (so it reads their
+  -- balance and their lines at one moment), written; their ACCRUED and ACCRUED_TO with them
+  procedure accrue_range(p_lo number, p_hi number, p_day date, p_caps varchar2) is
+  begin
+    delete from bk_accrual_new;
+    insert into bk_accrual_new (account_id, day_from, day_to, balance, rate, days, year_days, interest)
+    with acc as (
+      select a.id, a.product_id, a.balance, p.day_basis, p.od_rate, nvl(a.accrued_to, a.opened_on - 1) at0
+      from bk_account a join bk_product p on p.id = a.product_id
+      where a.id between p_lo and p_hi and a.status <> 'C' and a.opened_on <= p_day
+        and nvl(a.accrued_to, a.opened_on - 1) < p_day and instr(p_caps, p.cap_every) > 0),
+    -- the changes of its balance by value date after ACCRUED_TO (the later ones too: its balance is now)
+    ev as (
+      select l.account_id id, l.value_date day, sum(l.credit - l.debit) amt
+      from bk_line l join acc on acc.id = l.account_id
+      where l.value_date > acc.at0
+      group by l.account_id, l.value_date),
+    -- where a stretch starts: the day after ACCRUED_TO, a value date, a new rate of its product
+    pts as (
+      select id, at0 + 1 b from acc
+      union
+      select id, day from ev where day <= p_day
+      union
+      select acc.id, r.valid_from from acc join bk_rate r on r.product_id = acc.product_id
+      where r.valid_from > acc.at0 + 1 and r.valid_from <= p_day),
+    seg as (
+      select id, b f, nvl(lead(b) over (partition by id order by b) - 1, p_day) t from pts),
+    -- its balance by value date in a stretch: its balance now less what has a later value date
+    sv as (
+      select s.id, s.f, s.t, acc.product_id, acc.day_basis, acc.od_rate, acc.balance - nvl(sum(ev.amt), 0) vb
+      from seg s join acc on acc.id = s.id left join ev on ev.id = s.id and ev.day > s.f
+      group by s.id, s.f, s.t, acc.product_id, acc.day_basis, acc.od_rate, acc.balance),
+    -- the rates: each tier from its VALID_FROM to the next one of it (rate_of)
+    rt as (
+      select product_id, min_balance, rate, valid_from vf,
+             lead(valid_from) over (partition by product_id, min_balance order by valid_from) vn
+      from bk_rate),
+    sr as (
+      select sv.*,
+             case when sv.vb < 0 then sv.od_rate
+                  else nvl((select max(rt.rate) keep (dense_rank last order by rt.min_balance) from rt
+                            where rt.product_id = sv.product_id and rt.min_balance <= sv.vb and rt.vf <= sv.f
+                              and (rt.vn is null or rt.vn > sv.f)), 0) end rate,
+             case sv.day_basis when 'ACT365' then 365 else 360 end yd
+      from sv),
+    -- the days of each kind (30/360) in it
+    x as (
+      select sr.*, ct.c1 - cf.c1 n1, ct.c2 - cf.c2 n2, ct.c3 - cf.c3 n3
+      from sr join bk_calendar ct on ct.day = sr.t join bk_calendar cf on cf.day = sr.f - 1)
+    select id, f, t, vb, rate,
+           case when day_basis = '30360' then n1 + 2 * n2 + 3 * n3 else t - f + 1 end,
+           yd,
+           case when day_basis = '30360'
+                then n1 * round(vb * rate / 100 * 1 / yd, 6) + n2 * round(vb * rate / 100 * 2 / yd, 6)
+                     + n3 * round(vb * rate / 100 * 3 / yd, 6)
+                else (t - f + 1) * round(vb * rate / 100 * 1 / yd, 6) end
+    from x;
+    insert into bk_accrual (account_id, day_from, day_to, balance, rate, days, year_days, interest)
+    select account_id, day_from, day_to, balance, rate, days, year_days, interest from bk_accrual_new;
+    merge into bk_account a
+    using (select account_id, sum(interest) i from bk_accrual_new group by account_id) s
+    on (a.id = s.account_id)
+    when matched then update set a.accrued = a.accrued + s.i, a.accrued_to = p_day;
+  end;
+
+  procedure accrue(p_account_id number, p_day date default null) is
+    d date := nvl(trunc(p_day), open_day - 1);
+    a bk_account%rowtype := account_row(p_account_id);
+  begin
+    if d >= open_day then
+      fail(24, 'Οι τόκοι μετριούνται ως μια κλεισμένη ημέρα (ως ' || to_char(open_day - 1, 'DD/MM/YYYY') || ')');
     end if;
-    return case p_cap when 'M' then true
-                      when 'Q' then to_char(p_day, 'MM') in ('03', '06', '09', '12')
-                      else to_char(p_day, 'MM') = '12' end;
+    lock_accounts(p_account_id);
+    accrue_range(p_account_id, p_account_id, d, 'MQY');
+  end;
+
+  -- the interest accrued of the accounts p_lo .. p_hi of the products of p_caps capitalized on p_day: as
+  -- capitalize, set-based (a statement for all their entries, one for all their lines, ...). The ids of their
+  -- entries from the sequence of BK_ENTRY itself (its identity), to tie their lines to them
+  procedure capitalize_range(p_lo number, p_hi number, p_day date, p_caps varchar2) is
+    seq varchar2(128);
+  begin
+    select sequence_name into seq from user_tab_identity_cols where table_name = 'BK_ENTRY' and column_name = 'ID';
+    delete from bk_capital_new;
+    execute immediate
+      'insert into bk_capital_new (account_id, gross, tax, tax_rate, entry_id)
+       select id, gross, case when gross > 0 then round(gross * tax_rate / 100, 2) else 0 end, tax_rate, ' || seq || '.nextval
+       from (select a.id, round(a.accrued, 2) gross, p.tax_rate
+             from bk_account a join bk_product p on p.id = a.product_id
+             where a.id between :lo and :hi and a.status <> ''C'' and instr(:caps, p.cap_every) > 0
+               and round(a.accrued, 2) <> 0)'
+      using p_lo, p_hi, p_caps;
+    -- (the words as int_descr: a function of the package is not called in SQL)
+    insert into bk_entry (id, kind, book_date, value_date, channel, descr)
+    select entry_id, 'INT', p_day, p_day, 'SYS',
+           case when gross > 0 then 'Τόκοι ' || to_char(p_day, 'MM/YYYY') || case when tax > 0 then ' (φόρος '
+                     || rtrim(rtrim(to_char(tax_rate, 'FM990D00', q'[NLS_NUMERIC_CHARACTERS=',.']'), '0'), ',') || '%)' end
+                else 'Χρεωστικοί τόκοι υπερανάληψης ' || to_char(p_day, 'MM/YYYY') end
+    from bk_capital_new;
+    -- its lines, in the order of capitalize: INT_EXP, the account (gross), the account (tax), TAX; or the account
+    -- and INT_INC
+    insert into bk_line (entry_id, account_id, gl_code, debit, credit, value_date)
+    select entry_id, account_id, gl_code, debit, credit, p_day
+    from (select c.entry_id, k.n,
+                 case when k.n in (2, 3, 5) then c.account_id end account_id,
+                 case k.n when 1 then 'INT_EXP' when 4 then 'TAX' when 6 then 'INT_INC' end gl_code,
+                 case k.n when 1 then c.gross when 3 then c.tax when 5 then -c.gross else 0 end debit,
+                 case k.n when 2 then c.gross when 4 then c.tax when 6 then -c.gross else 0 end credit
+          from bk_capital_new c
+          join (select level n from dual connect by level <= 6) k
+            on (c.gross > 0 and (k.n in (1, 2) or (k.n in (3, 4) and c.tax > 0))) or (c.gross < 0 and k.n in (5, 6))
+          order by c.entry_id, k.n);
+    insert into bk_capital (account_id, day, gross, tax, entry_id)
+    select account_id, p_day, gross, tax, entry_id from bk_capital_new;
+    -- (the rest of the rounding stays, for the next time)
+    merge into bk_account a
+    using bk_capital_new c on (a.id = c.account_id)
+    when matched then update set a.accrued = a.accrued - c.gross, a.balance = a.balance + c.gross - c.tax;
   end;
 
   function capitalize(p_account_id number, p_day date) return number is
@@ -857,8 +989,14 @@ create or replace package body bk_core as
     gross number;
     tax number := 0;
     e number;
+    descr_ varchar2(200);
   begin
-    select * into a from bk_account where id = p_account_id for update;
+    lock_accounts(p_account_id);
+    -- its interest up to the last day closed first (p_day itself, if it is closed: a day before the business day)
+    if least(trunc(p_day), open_day - 1) >= account_row(p_account_id).opened_on then
+      accrue_range(p_account_id, p_account_id, least(trunc(p_day), open_day - 1), 'MQY');
+    end if;
+    select * into a from bk_account where id = p_account_id;
     select * into p from bk_product where id = a.product_id;
     gross := round(a.accrued, 2);
     if gross = 0 then
@@ -867,11 +1005,10 @@ create or replace package body bk_core as
     if gross > 0 then
       tax := round(gross * p.tax_rate / 100, 2);
     end if;
-    -- booked on the day (the business day: close_day), with its value date
+    -- booked on the day, with its value date
+    descr_ := int_descr(gross, tax, p.tax_rate, p_day);                 -- (not in SQL: PLS-00231)
     insert into bk_entry (kind, book_date, value_date, channel, descr)
-    values ('INT', p_day, p_day, 'SYS',
-            case when gross > 0 then 'Τόκοι ' || to_char(p_day, 'MM/YYYY') || case when tax > 0 then ' (φόρος ' || rtrim(rtrim(to_char(p.tax_rate, 'FM990D00', q'[NLS_NUMERIC_CHARACTERS=',.']'), '0'), ',') || '%)' end
-                 else 'Χρεωστικοί τόκοι υπερανάληψης ' || to_char(p_day, 'MM/YYYY') end)
+    values ('INT', p_day, p_day, 'SYS', descr_)
     returning id into e;
     if gross > 0 then
       line(e, null, 'INT_EXP', gross, 0);
@@ -890,33 +1027,49 @@ create or replace package body bk_core as
     return e;
   end;
 
-  procedure close_day(p_day date default null) is
-    d date := open_day;
+  -- the balance of an account by value date for the interest of a day: without the interest capitalized that
+  -- day (booked after the interest of its day was counted)
+  function interest_by_day(p_account_id number, p_day_from date, p_day_to date) return number is
+    a bk_account%rowtype := account_row(p_account_id);
+    basis varchar2(6);
+    s number := 0;
+    vb number;
     days_ number;
     year_ number;
-    rate_ number;
-    i number;
-    e number;
+    d date := trunc(p_day_from);
+  begin
+    select day_basis into basis from bk_product where id = a.product_id;
+    while d <= trunc(p_day_to) loop
+      select nvl(sum(l.credit - l.debit), 0) into vb
+      from bk_line l join bk_entry e on e.id = l.entry_id
+      where l.account_id = p_account_id and l.value_date <= d and not (e.kind = 'INT' and e.book_date = d);
+      day_count(basis, d, days_, year_);
+      s := s + round(vb * rate_of(a.product_id, d, vb) / 100 * days_ / year_, 6);
+      d := d + 1;
+    end loop;
+    return s;
+  end;
+
+  -- the end of the business day: at the end of a period, its accounts accrued and capitalized (by 200.000)
+  procedure close_day(p_day date default null) is
+    d date := open_day;
+    caps varchar2(3);
+    lo number;
+    hi number;
   begin
     if p_day is not null and trunc(p_day) <> d then
       fail(24, 'Κλείνει μόνο η εργάσιμη ημέρα ' || to_char(d, 'DD/MM/YYYY') || ', όχι η ' || to_char(p_day, 'DD/MM/YYYY'));
     end if;
-    for a in (select a.id, a.product_id, p.day_basis, p.cap_every,
-                     (select nvl(sum(l.credit - l.debit), 0) from bk_line l join bk_entry x on x.id = l.entry_id
-                      where l.account_id = a.id and x.value_date <= d) vb
-              from bk_account a join bk_product p on p.id = a.product_id
-              where a.status <> 'C' and a.opened_on <= d
-              order by a.id) loop
-      day_count(a.day_basis, d, days_, year_);
-      rate_ := rate_of(a.product_id, d, a.vb);
-      i := a.vb * rate_ / 100 * days_ / year_;
-      insert into bk_accrual (account_id, day, balance, rate, days, year_days, interest)
-      values (a.id, d, a.vb, rate_, days_, year_, round(i, 6));
-      update bk_account set accrued = accrued + round(i, 6), accrued_to = d where id = a.id;
-      if period_end(a.cap_every, d) then
-        e := capitalize(a.id, d);
-      end if;
-    end loop;
+    if d = last_day(d) then
+      caps := 'M' || case when to_char(d, 'MM') in ('03', '06', '09', '12') then 'Q' end
+                  || case when to_char(d, 'MM') = '12' then 'Y' end;
+      select min(id), max(id) into lo, hi from bk_account;
+      while lo <= hi loop
+        accrue_range(lo, lo + 199999, d, caps);
+        capitalize_range(lo, lo + 199999, d, caps);
+        lo := lo + 200000;
+      end loop;
+    end if;
     insert into bk_day (day) values (d);
   end;
 

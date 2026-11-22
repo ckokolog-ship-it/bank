@@ -283,7 +283,8 @@ def test_close_of_a_day_and_its_interest(base):
     r = ok(base, '/api/day/close', {}, 'tst-manager')
     assert r['closed'] == d['open_day'] and r['open_day'] > d['open_day'] and r['last_closed'] == d['open_day']
     i = ok(base, '/api/accounts/%d/interest?from=%s&to=%s' % (a['id'], d['open_day'], d['open_day']))
-    assert len(i['days']) == 1 and i['days'][0]['balance'] == 36500 and i['days'][0]['rate'] == 1
+    s = i['stretches']                                        # (accrued when asked: up to the day closed)
+    assert len(s) == 1 and s[0]['day_from'] == s[0]['day_to'] == d['open_day'] and s[0]['balance'] == 36500 and s[0]['rate'] == 1
     assert abs(i['total'] - 1.0) < 1e-6                       # 36.500 × 1 % / 365
 
 
