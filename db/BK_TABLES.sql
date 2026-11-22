@@ -398,3 +398,26 @@ select 'ATM', m.code, 'cash ' || m.cash || ', its cassettes ' || nvl(sum(n.note 
 from bk_atm m left join bk_atm_note n on n.atm_id = m.id
 group by m.code, m.cash
 having m.cash <> nvl(sum(n.note * n.pieces), 0);
+
+-- the views of the forms: each a table that keeps its key (BK_ACCOUNT, BK_HOLDER, BK_LINE), no analytics,
+-- no union: a block of the Forms reads its rows by their ROWID
+-- the accounts: their product, their primary holder
+create or replace view bk_account_v as
+select a.id, a.iban, a.name, p.code product, p.name product_name, a.status, a.balance, a.od_limit,
+       round(a.accrued, 2) accrued, a.accrued_to, a.opened_on, a.closed_on,
+       (select c.name from bk_holder h, bk_customer c where h.account_id = a.id and h.role = 'P' and c.id = h.customer_id) holder
+from bk_account a, bk_product p
+where p.id = a.product_id;
+
+-- the accounts of each customer, as primary holder (P) or joint (J)
+create or replace view bk_customer_account_v as
+select h.customer_id, h.account_id, h.role, a.iban, p.code product, p.name product_name, a.status, a.balance, a.od_limit
+from bk_holder h, bk_account a, bk_product p
+where a.id = h.account_id and p.id = a.product_id;
+
+-- the lines of the accounts with their entry (BK_STATEMENT without its running balance: the form counts it)
+create or replace view bk_statement_line as
+select l.id line_id, l.account_id, l.entry_id, e.kind, e.channel, e.book_date, e.value_date, e.descr, e.reversal_of,
+       l.op, l.debit, l.credit
+from bk_line l, bk_entry e
+where e.id = l.entry_id and l.account_id is not null;
