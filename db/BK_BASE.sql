@@ -10,7 +10,9 @@ select v.code, v.name, v.kind from (values
   ('TAX',     'Φόρος τόκων προς απόδοση',                'L'),
   ('FEE',     'Προμήθειες (έσοδο)',                      'I'),
   ('CC_MERCH', 'Αγορές με πιστωτικές κάρτες (προς εκκαθάριση)', 'L'),
-  ('CC_INT',  'Τόκοι πιστωτικών καρτών (έσοδο)',         'I')
+  ('CC_INT',  'Τόκοι πιστωτικών καρτών (έσοδο)',         'I'),
+  ('FX_POS',  'Θέση συναλλάγματος',                      'A'),
+  ('FX_INC',  'Έσοδα από συνάλλαγμα',                    'I')
 ) v (code, name, kind)
 where not exists (select 1 from bk_gl g where g.code = v.code);
 
@@ -20,7 +22,8 @@ select v.name, v.value from (values
   ('BRANCH_CODE', '0001'),
   ('ATM_NOTES', '20,50'),         -- the notes the ATMs give (€)
   ('ATM_MAX_NOTES', '40'),        -- the most notes of one withdrawal
-  ('CC_HOLD_DAYS', '7')           -- an authorization of a credit card not posted in so many days: released
+  ('CC_HOLD_DAYS', '7'),          -- an authorization of a credit card not posted in so many days: released
+  ('BASE_CURRENCY', 'EUR')        -- the currency of the bank: every line in it too (not changed after the first entry)
 ) v (name, value)
 where not exists (select 1 from bk_setting s where s.name = v.name);
 
@@ -32,6 +35,21 @@ select v.code, v.name, v.kind, v.day_basis, v.cap_every, v.tax_rate, v.od_rate f
   ('SAVP', 'Ταμιευτήριο Plus',              'SAV', 'ACT360', 'M', 15, 0)
 ) v (code, name, kind, day_basis, cap_every, tax_rate, od_rate)
 where not exists (select 1 from bk_product p where p.code = v.code);
+
+-- the currencies (the margin of the bank on a conversion, % each side) and their rates from the start (1 EUR = ...)
+insert into bk_currency (code, name, decimals, spread_pct)
+select v.code, v.name, v.decimals, v.spread from (values
+  ('USD', 'Δολάριο ΗΠΑ', 2, 0.5), ('GBP', 'Λίρα Αγγλίας', 2, 0.5), ('CHF', 'Φράγκο Ελβετίας', 2, 0.5),
+  ('JPY', 'Γιεν Ιαπωνίας', 0, 0.75), ('SEK', 'Κορόνα Σουηδίας', 2, 0.75), ('NOK', 'Κορόνα Νορβηγίας', 2, 0.75),
+  ('DKK', 'Κορόνα Δανίας', 2, 0.5), ('CAD', 'Δολάριο Καναδά', 2, 0.75), ('AUD', 'Δολάριο Αυστραλίας', 2, 0.75)
+) v (code, name, decimals, spread)
+where not exists (select 1 from bk_currency c where c.code = v.code);
+insert into bk_fx_rate (currency, day, mid)
+select v.code, date '2020-01-01', v.mid from (values
+  ('USD', 1.08), ('GBP', 0.85), ('CHF', 0.95), ('JPY', 160), ('SEK', 11.40), ('NOK', 11.60), ('DKK', 7.46),
+  ('CAD', 1.47), ('AUD', 1.63)
+) v (code, mid)
+where not exists (select 1 from bk_fx_rate r where r.currency = v.code);
 
 -- the credit cards: their products and terms (BK_CC_PRODUCT)
 insert into bk_product (code, name, kind, day_basis, cap_every, tax_rate, od_rate)
@@ -77,4 +95,19 @@ select a.id, v.note, v.pieces from (values
 ) v (code, note, pieces)
 join bk_atm a on a.code = v.code
 where not exists (select 1 from bk_atm_note n where n.atm_id = a.id);
+commit;
+
+-- the currencies each product opens in (the first: by default), and its rates in the others; a product with
+-- currencies of its own already: as it is
+update bk_product p set currencies = (select v.cur from (values
+  ('CUR', 'EUR,USD,GBP,CHF'), ('BUS', 'EUR,USD'), ('SAV', 'EUR,USD,GBP')) v (code, cur) where v.code = p.code)
+where p.currencies = 'EUR' and p.code in ('CUR', 'BUS', 'SAV');
+insert into bk_rate (product_id, currency, valid_from, min_balance, rate)
+select p.id, v.cur, date '2020-01-01', v.min_balance, v.rate from (values
+  ('CUR', 'USD', 0, 0.05), ('CUR', 'GBP', 0, 0.05), ('CUR', 'CHF', 0, 0),
+  ('BUS', 'USD', 0, 0),
+  ('SAV', 'USD', 0, 0.50), ('SAV', 'USD', 10000, 1.00), ('SAV', 'GBP', 0, 0.40)
+) v (code, cur, min_balance, rate)
+join bk_product p on p.code = v.code
+where not exists (select 1 from bk_rate r where r.product_id = p.id and r.currency = v.cur);
 commit;

@@ -42,5 +42,7 @@ drop table if exists bk_product purge;
 drop table if exists bk_customer purge;
 drop table if exists bk_gl purge;
 drop table if exists bk_setting purge;
+drop table if exists bk_fx_rate purge;
+drop table if exists bk_currency purge;
 prompt == BANK UNINSTALL OK
 exit

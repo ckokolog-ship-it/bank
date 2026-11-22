@@ -365,9 +365,10 @@ final class Api {
                 Object id = r.get("id");
                 r.put("rates_now", Db.rows(c, "select min_balance, bk_core.rate_of(?, bk_core.open_day, min_balance) rate "
                         + "from (select distinct min_balance from bk_rate where product_id = ? "
+                        + "and currency = bk_core.base_currency "         // (the other currencies: the next step)
                         + "and valid_from <= bk_core.open_day) order by min_balance", id, id));
                 r.put("rates", Db.rows(c, "select valid_from, min_balance, rate from bk_rate where product_id = ? "
-                        + "order by valid_from desc, min_balance", id));
+                        + "and currency = bk_core.base_currency order by valid_from desc, min_balance", id));
             }
             return rows;
         }
