@@ -30,11 +30,18 @@ import java.util.Map;
  *   GET  /api/customers/{id}                     one, with its accounts
  *   POST /api/customers {name, afm, phone, email, address, birth_date, id_card}   a new one
  *   POST /api/customers/{id} {... active}        its data corrected
- *   GET  /api/products                           the products, their rates now (by tier) and their history
- *   POST /api/products/{code}/rates {valid_from, min_balance, rate}   a rate from a day on (M)
+ *   GET  /api/products                           the products, their currencies, their rates now (by tier; in the
+ *                                                base currency, and by currency) and their history
+ *   POST /api/products/{code}/rates {valid_from, min_balance, rate, currency}   a rate from a day on (M)
+ *   POST /api/products/{code}/currencies {currencies: "EUR,USD"}   the currencies it opens in (M)
+ *   GET  /api/fx                                 the currencies (the base one first), their last rate and its day
+ *   GET  /api/fx/convert?amount=&from=&to=       an amount converted: at the mid rate, and as the customer gets it
+ *   GET  /api/fx/{code}?days=                    its rates, the newest first
+ *   POST /api/fx {code, name, decimals, spread_pct, active}   a currency new or changed (M)
+ *   POST /api/fx/{code}/rates {day, mid}         its rate from a day on: 1 of the base currency = mid (M)
  *   GET  /api/accounts?q=&status=&limit=&offset= the accounts (IBAN, the name or AFM of a holder)
  *   GET  /api/accounts/{id}                      one: its product, holders, balance, what is available
- *   POST /api/accounts {product, customer_id, od_limit, name}   a new one
+ *   POST /api/accounts {product, customer_id, od_limit, name, currency}   a new one (in a currency of its product)
  *   POST /api/accounts/{id}/holders {customer_id}   POST /api/accounts/{id}/holders/{customer}/remove
  *   POST /api/accounts/{id}/status {status O|B}  (M)   .../od-limit {od_limit} (M)   .../close (M)
  *   GET  /api/accounts/{id}/statement?from=&to=  its moves, the balance before and after
@@ -194,6 +201,9 @@ final class Api {
             case "products" -> {
                 return products(c, u, get, p, in);
             }
+            case "fx" -> {
+                return fx(c, u, get, p, q, in);
+            }
             case "accounts" -> {
                 return accounts(c, u, get, p, q, in);
             }
@@ -349,7 +359,7 @@ final class Api {
             throw new Http.Fail(404, "not_found", "Δεν υπάρχει πελάτης " + id);
         }
         r.put("accounts", Db.rows(c, "select a.id, a.iban, p.code product, p.name product_name, a.name, a.status, "
-                + "a.balance, a.od_limit, h.role from bk_holder h join bk_account a on a.id = h.account_id "
+                + "a.currency, a.balance, a.od_limit, h.role from bk_holder h join bk_account a on a.id = h.account_id "
                 + "join bk_product p on p.id = a.product_id where h.customer_id = ? order by a.status desc, a.id", id));
         return r;
     }
@@ -359,7 +369,7 @@ final class Api {
             throws SQLException {
         if (get && p.length == 1) {
             List<Map<String, Object>> rows = Db.rows(c, "select id, code, name, kind, day_basis, cap_every, tax_rate, "
-                    + "od_rate, active, (select count(*) from bk_account a where a.product_id = p.id and a.status <> 'C') "
+                    + "od_rate, active, currencies, (select count(*) from bk_account a where a.product_id = p.id and a.status <> 'C') "
                     + "accounts from bk_product p order by id");
             for (Map<String, Object> r : rows) {
                 Object id = r.get("id");
@@ -367,8 +377,17 @@ final class Api {
                         + "from (select distinct min_balance from bk_rate where product_id = ? "
                         + "and currency = bk_core.base_currency "         // (the other currencies: the next step)
                         + "and valid_from <= bk_core.open_day) order by min_balance", id, id));
-                r.put("rates", Db.rows(c, "select valid_from, min_balance, rate from bk_rate where product_id = ? "
-                        + "and currency = bk_core.base_currency order by valid_from desc, min_balance", id));
+                r.put("rates", Db.rows(c, "select currency, valid_from, min_balance, rate from bk_rate where product_id = ? "
+                        + "order by case when currency = bk_core.base_currency then 0 else 1 end, currency, valid_from desc, "
+                        + "min_balance", id));
+                // the rates now in each of its currencies
+                Map<String, Object> by = new LinkedHashMap<>();
+                for (String cur : String.valueOf(r.get("currencies")).split(",")) {
+                    by.put(cur, Db.rows(c, "select min_balance, bk_core.rate_of(?, bk_core.open_day, min_balance, ?) rate "
+                            + "from (select distinct min_balance from bk_rate where product_id = ? and currency = ? "
+                            + "and valid_from <= bk_core.open_day) order by min_balance", id, cur, id, cur));
+                }
+                r.put("rates_by_currency", by);
             }
             return rows;
         }
@@ -390,9 +409,68 @@ final class Api {
             if (rate == null) {
                 throw new Http.Fail(400, "missing", "rate");
             }
-            Db.exec(c, "begin bk_core.set_rate(?, ?, ?, ?); end;", pr.get("id"), from,
-                    Http.decimal(in, "min_balance", BigDecimal.ZERO), rate);
+            String cur = Http.text(in, "currency", false);
+            Db.exec(c, "begin bk_core.set_rate(?, ?, ?, ?, ?); end;", pr.get("id"), from,
+                    Http.decimal(in, "min_balance", BigDecimal.ZERO), rate, cur == null ? "EUR" : cur.toUpperCase());
             return products(c, u, true, new String[]{"products"}, Map.of());
+        }
+        if (!get && is(p, "products", "*", "currencies")) {
+            need(u, "MANAGER");
+            Db.exec(c, "begin bk_core.set_currencies(?, ?); end;", p[1], Http.text(in, "currencies", true));
+            return products(c, u, true, new String[]{"products"}, Map.of());
+        }
+        throw new Http.Fail(404, "not_found", "Δεν υπάρχει αυτή η κλήση");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    private Object fx(Connection c, Auth.User u, boolean get, String[] p, Map<String, String> q, Map<String, Object> in)
+            throws SQLException {
+        String list = "select code, name, decimals, spread_pct, active, mid, rate_day from bk_currency_v "
+                + "order by case when code = bk_core.base_currency then 0 else 1 end, code";
+        if (get && p.length == 1) {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("base", Db.row(c, "select bk_core.base_currency v from dual").get("v"));
+            r.put("currencies", Db.rows(c, list));
+            return r;
+        }
+        if (get && is(p, "fx", "convert")) {
+            String a = q.get("amount");
+            if (a == null || q.get("from") == null || q.get("to") == null) {
+                throw new Http.Fail(400, "missing", "amount, from, to");
+            }
+            BigDecimal amount;
+            try {
+                amount = new BigDecimal(a.replace(',', '.'));
+            } catch (NumberFormatException e) {
+                throw new Http.Fail(400, "bad_number", "amount: a number");
+            }
+            return Db.row(c, "select ? amount, upper(?) from_, upper(?) to_, bk_core.fx_convert(?, ?, ?) mid, "
+                    + "bk_core.fx_convert(?, ?, ?, null, 'Y') customer from dual", amount, q.get("from"), q.get("to"),
+                    amount, q.get("from"), q.get("to"), amount, q.get("from"), q.get("to"));
+        }
+        if (get && p.length == 2) {
+            Map<String, Object> r = Db.row(c, "select code, name, decimals, spread_pct, active, mid, rate_day from bk_currency_v "
+                    + "where code = upper(?)", p[1]);
+            if (r == null) {
+                throw new Http.Fail(404, "not_found", "Δεν υπάρχει νόμισμα " + p[1]);
+            }
+            r.put("rates", Db.rows(c, "select day, mid from bk_fx_rate where currency = upper(?) order by day desc "
+                    + "fetch first ? rows only", p[1], Http.number(q, "days", 60, 1, 5000)));
+            return r;
+        }
+        if (!get && p.length == 1) {
+            need(u, "MANAGER");
+            String active = Http.text(in, "active", false);
+            Db.exec(c, "begin bk_core.set_currency(?, ?, ?, ?, ?); end;", Http.text(in, "code", true), Http.text(in, "name", true),
+                    Http.decimal(in, "decimals", new BigDecimal(2)), Http.decimal(in, "spread_pct", new BigDecimal("0.5")),
+                    active == null ? "Y" : active.toUpperCase());
+            return fx(c, u, true, new String[]{"fx"}, Map.of(), Map.of());
+        }
+        if (!get && is(p, "fx", "*", "rates")) {
+            need(u, "MANAGER");
+            LocalDate d = Http.dateValue(in, "day");
+            Db.exec(c, "begin bk_core.set_fx_rate(?, ?, ?); end;", p[1], d == null ? day(c) : d, Http.decimal(in, "mid", null));
+            return fx(c, u, true, new String[]{"fx", p[1]}, Map.of(), Map.of());
         }
         throw new Http.Fail(404, "not_found", "Δεν υπάρχει αυτή η κλήση");
     }
@@ -414,8 +492,8 @@ final class Api {
                     + " || '%' or jc.afm = ?))) and (? is null or a.status = ?)";
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("total", Db.row(c, "select count(*) n" + from, v, v, v, v, v, v, v, vs, vs).get("n"));
-            r.put("rows", Db.rows(c, "select a.id, a.iban, p.code product, a.name, a.status, a.balance, a.od_limit, "
-                    + "a.accrued, c.id customer_id, c.name holder, (select count(*) from bk_holder j where j.account_id = a.id) "
+            r.put("rows", Db.rows(c, "select a.id, a.iban, p.code product, a.name, a.status, a.currency, a.balance, "
+                    + "a.od_limit, a.accrued, c.id customer_id, c.name holder, (select count(*) from bk_holder j where j.account_id = a.id) "
                     + "holders" + from + " order by a.id offset ? rows fetch next ? rows only",
                     v, v, v, v, v, v, v, vs, vs, Http.number(q, "offset", 0, 0, Integer.MAX_VALUE), limit(q)));
             return r;
@@ -423,8 +501,9 @@ final class Api {
         if (!get && p.length == 1) {
             Long cust = Http.longValue(in, "customer_id");
             String prod = Http.text(in, "product", true);
-            long id = Db.fn(c, "bk_core.open_account(p_product_code => ?, p_customer_id => ?, p_od_limit => ?, p_name => ?)",
-                    prod, cust, Http.decimal(in, "od_limit", BigDecimal.ZERO), Http.text(in, "name", false));
+            long id = Db.fn(c, "bk_core.open_account(p_product_code => ?, p_customer_id => ?, p_od_limit => ?, p_name => ?, "
+                    + "p_currency => ?)", prod, cust, Http.decimal(in, "od_limit", BigDecimal.ZERO), Http.text(in, "name", false),
+                    Http.text(in, "currency", false));
             return account(c, id);
         }
         if (p.length < 2) {
@@ -500,9 +579,9 @@ final class Api {
     private static Map<String, Object> account(Connection c, long id) throws SQLException {
         Map<String, Object> r = Db.row(c, "select a.id, a.iban, a.name, p.code product, p.name product_name, p.kind, "
                 + "p.day_basis, p.cap_every, p.tax_rate, p.od_rate, a.opened_on, a.closed_on, a.status, a.od_limit, "
-                + "a.balance, round(a.accrued, 2) accrued, a.accrued_to, "
+                + "a.balance, round(a.accrued, 2) accrued, a.accrued_to, a.currency, p.currencies, "
                 + "case when a.status = 'O' then a.balance + a.od_limit else 0 end available, "
-                + "bk_core.rate_of(a.product_id, bk_core.open_day, a.balance) rate_now "
+                + "bk_core.rate_of(a.product_id, bk_core.open_day, a.balance, a.currency) rate_now "
                 + "from bk_account a join bk_product p on p.id = a.product_id where a.id = ?", id);
         if (r == null) {
             throw new Http.Fail(404, "not_found", "Δεν υπάρχει λογαριασμός " + id);
@@ -526,7 +605,8 @@ final class Api {
         r.put("carry_in", in);
         List<Map<String, Object>> rows = Db.rows(c, "select s.entry_id, s.kind, l.op, e.channel, s.book_date, s.value_date, "
                 + "s.descr, s.reversal_of, (select x.id from bk_entry x where x.reversal_of = s.entry_id) reversed_by, "
-                + "s.debit, s.credit, s.balance, e.created_by from bk_statement s join bk_entry e on e.id = s.entry_id "
+                + "s.debit, s.credit, s.balance, e.created_by, e.orig_amount, e.orig_currency, e.fx_rate "
+                + "from bk_statement s join bk_entry e on e.id = s.entry_id "
                 + "join bk_line l on l.id = s.line_id where s.account_id = ? and s.book_date between ? and ? "
                 + "order by s.book_date, s.entry_id, s.line_id fetch first 3000 rows only", id, from, to);
         r.put("rows", rows);
@@ -605,12 +685,14 @@ final class Api {
 
     private static Map<String, Object> entry(Connection c, long id) throws SQLException {
         Map<String, Object> r = Db.row(c, "select id, kind, channel, book_date, value_date, descr, reversal_of, "
+                + "orig_amount, orig_currency, fx_rate, "
                 + "(select x.id from bk_entry x where x.reversal_of = e.id) reversed_by, created_by, "
                 + "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') created_at from bk_entry e where id = ?", id);
         if (r == null) {
             throw new Http.Fail(404, "not_found", "Δεν υπάρχει εγγραφή " + id);
         }
-        r.put("lines", Db.rows(c, "select l.id, l.account_id, a.iban, l.gl_code, g.name gl_name, l.op, l.debit, l.credit "
+        r.put("lines", Db.rows(c, "select l.id, l.account_id, a.iban, l.gl_code, g.name gl_name, l.op, l.currency, "
+                + "l.debit, l.credit, l.base_debit, l.base_credit "
                 + "from bk_line l left join bk_account a on a.id = l.account_id left join bk_gl g on g.code = l.gl_code "
                 + "where l.entry_id = ? order by l.id", id));
         return r;

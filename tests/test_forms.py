@@ -659,3 +659,52 @@ def test_the_credit_cards(cur):
         for n, v in old:
             cur.execute('insert into bk_setting (name, value) values (:n, :v)', n=n, v=v)
         cur.connection.commit()
+
+
+@needs_db
+def test_the_currencies_in_the_forms(cur):
+    """BK_FX: a currency saved, its rate, active or not, an amount converted; an account in USD (BK_CUSTOMERS); a
+    transfer to it (BK_MOVE: what it got); the amount it was in (post_query); the currencies and a rate of a
+    product in USD (BK_PRODUCTS)"""
+    compile_ui(cur, 'BK_FX')
+    run(cur, "ui.press('CTL.SAVECUR');", CTL__S_CODE='xts', CTL__S_NAME='Test νόμισμα', CTL__S_DEC='2', CTL__S_SPREAD='1')
+    xid = cur.execute("select id from bk_currency_v where code = 'XTS'").fetchone()[0]
+    assert 'CURR:id = %d;' % xid in queries(cur) and 'XTS' in msgs(cur)
+    assert cur.execute("select name, spread_pct, active from bk_currency where code = 'XTS'").fetchone() == ('Test νόμισμα', 1, 'Y')
+    day = cur.execute("select to_char(bk_core.open_day, 'DD/MM/YYYY') from dual").fetchone()[0]
+    assert 'Πρώτα ένα νόμισμα' in fails(cur, "ui.press('CTL.SETFX');", CTL__R_DAY=day, CTL__R_MID='2')
+    run(cur, "ui.press('CTL.SETFX');", CURR__ID=str(xid), CURR__CODE='XTS', CTL__R_DAY=day, CTL__R_MID='2')
+    assert cur.execute("select mid from bk_currency_v where code = 'XTS'").fetchone()[0] == 2
+    run(cur, "ui.press('CTL.CONVERT');", CTL__X_AMOUNT='100', CTL__X_FROM='EUR', CTL__X_TO='XTS')
+    assert item(cur, 'CTL.X_RESULT') == '100,00 € = 200,00 XTS  ·  ο πελάτης παίρνει 198,00 XTS'
+    assert 'BK-152' in fails(cur, "ui.press('CTL.SETFX');", CURR__ID=str(xid), CURR__CODE='XTS', CTL__R_DAY=day, CTL__R_MID='0')
+    run(cur, "ui.press('CTL.TOGGLECUR');", CURR__ID=str(xid), CURR__CODE='XTS')
+    assert cur.execute("select active from bk_currency where code = 'XTS'").fetchone()[0] == 'N'
+    # an account in USD; a transfer to it from one in EUR
+    compile_ui(cur, 'BK_CUSTOMERS')
+    c = cur.callfunc('bk_core.new_customer', int, ['Test Φόρμες νόμισμα %d' % random.randrange(10 ** 6), afm()])
+    cur.connection.commit()
+    run(cur, "ui.press('CTL.NEWACC');", CUST__ID=str(c), CTL__A_PRODUCT='CUR', CTL__A_OD='0', CTL__A_CURRENCY='USD')
+    u = cur.execute("select account_id from bk_customer_account_v where customer_id = :c and currency = 'USD'", c=c).fetchone()[0]
+    assert '(USD)' in msgs(cur)
+    assert 'BK-153' in fails(cur, "ui.press('CTL.NEWACC');", CUST__ID=str(c), CTL__A_PRODUCT='SAVP', CTL__A_OD='0',
+                             CTL__A_CURRENCY='USD')
+    compile_ui(cur, 'BK_MOVE')
+    a = new_account(cur, 500)
+    run(cur, "ui.press('CTL.SAVE');", CTL__M_ACC_ID=str(a), CTL__M_KIND='TRF', CTL__M_TO_ID=str(u), CTL__M_AMOUNT='100',
+        CTL__M_KIND_TEXT='Μεταφορά', CTL__M_VDATE=day)
+    got = cur.execute("select balance from bk_account where id = :u", u=u).fetchone()[0]
+    assert got > 0 and item(cur, 'CTL.M_RESULT').endswith(' 100,00 € → %s USD' % ('%.2f' % got).replace('.', ','))
+    run(cur, "ui.post_query('LAST');", CTL__M_ACC_ID=str(u), LAST__ENTRY_ID='1', LAST__LINE_ID='1', LAST__KIND='TRF',
+        LAST__OP='TRI', LAST__ORIG_AMOUNT='100', LAST__ORIG_CURRENCY='EUR', LAST__FX_RATE='1.2438', SYSTEM__TRIGGER_RECORD='1')
+    assert item(cur, 'LAST.ORIG_TEXT') == '100,00 € × 1,2438'
+    # a product: its currencies, a rate in USD
+    compile_ui(cur, 'BK_PRODUCTS')
+    pid = cur.execute("select id from bk_product where code = 'TF1'").fetchone()
+    if pid:
+        run(cur, "ui.press('CTL.SETCURS');", PROD__ID=str(pid[0]), PROD__CODE='TF1', CTL__P_CURS='eur,usd')
+        assert cur.execute("select currencies from bk_product where id = :p", p=pid[0]).fetchone()[0] == 'EUR,USD'
+        assert 'BK-153' in fails(cur, "ui.press('CTL.SETCURS');", PROD__ID=str(pid[0]), PROD__CODE='TF1', CTL__P_CURS='EUR,EUR')
+        run(cur, "ui.press('CTL.SETRATE');", PROD__ID=str(pid[0]), CTL__N_FROM=day, CTL__N_MIN='0', CTL__N_RATE='1.5',
+            CTL__N_CURRENCY='USD')
+        assert cur.execute("select rate from bk_rate where product_id = :p and currency = 'USD'", p=pid[0]).fetchone()[0] == 1.5

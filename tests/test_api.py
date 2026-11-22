@@ -314,3 +314,37 @@ def test_the_pages(base):
         assert call(base, '/web/' + f, raw=True)[0] == 200
     assert call(base, '/web/nope.js', raw=True)[0] == 404
     assert call(base, '/api/nope', token=tok(base, 'tst-teller'))[0] == 404
+
+
+def test_the_currencies(base):
+    """the currencies and their rates, a conversion, a rate (M), an account in USD, a transfer to it from one in EUR
+    (the amount it was in, each line in its currency and in the base one), the rates of a product by currency"""
+    r = ok(base, '/api/fx')
+    assert r['base'] == 'EUR' and r['currencies'][0]['code'] == 'EUR' and r['currencies'][0]['mid'] == 1
+    usd = [c for c in r['currencies'] if c['code'] == 'USD'][0]
+    x = ok(base, '/api/fx/convert?amount=100&from=EUR&to=USD')
+    assert x['mid'] == round(100 * usd['mid'], 2) and x['customer'] < x['mid'] and (x['from_'], x['to_']) == ('EUR', 'USD')
+    assert call(base, '/api/fx/convert?amount=100&from=EUR&to=XXQ', token=tok(base, 'tst-teller'))[1]['error'] == 'BK-152'
+    day = ok(base, '/api/day')['open_day']
+    assert call(base, '/api/fx/USD/rates', {'day': day, 'mid': usd['mid']}, tok(base, 'tst-teller'))[0] == 403
+    h = ok(base, '/api/fx/USD/rates', {'day': day, 'mid': usd['mid']}, 'tst-manager')
+    assert h['code'] == 'USD' and h['rates'][0] == {'day': day, 'mid': usd['mid']}
+    assert call(base, '/api/fx', {'code': 'Q', 'name': 'x'}, tok(base, 'tst-manager'))[1]['error'] == 'BK-152'
+    # an account in USD; one in EUR (of TA1) to it
+    c = ok(base, '/api/customers', {'name': 'Test Νόμισμα %d' % random.randrange(10 ** 6), 'afm': afm()})
+    u = ok(base, '/api/accounts', {'product': 'CUR', 'customer_id': c['id'], 'currency': 'USD'})
+    assert u['currency'] == 'USD' and 'USD' in u['currencies']
+    s, e = call(base, '/api/accounts', {'product': 'SAVP', 'customer_id': c['id'], 'currency': 'USD'}, tok(base, 'tst-teller'))
+    assert s == 400 and e['error'] == 'BK-153'
+    a = open_account(base, 500)
+    e = ok(base, '/api/movements', {'kind': 'TRF', 'account_id': a['id'], 'to_account': str(u['id']), 'amount': 100})
+    assert (e['orig_amount'], e['orig_currency']) == (100, 'EUR') and e['fx_rate'] > 0
+    assert [l['currency'] for l in e['lines']] == ['EUR', 'EUR', 'USD', 'USD', 'USD']
+    got = ok(base, '/api/accounts/%d' % u['id'])['balance']
+    assert got == round(100 * e['fx_rate'], 2)
+    st = ok(base, '/api/accounts/%d/statement?from=%s&to=%s' % (u['id'], day, day))
+    assert st['rows'][0]['orig_currency'] == 'EUR' and st['carry_out'] == got
+    p = [x for x in ok(base, '/api/products') if x['code'] == 'CUR'][0]
+    assert p['currencies'].startswith('EUR') and 'USD' in p['rates_by_currency']
+    assert {x['currency'] for x in p['rates']} >= {'EUR', 'USD'}
+    assert call(base, '/api/products/CUR/currencies', {'currencies': 'EUR,EUR'}, tok(base, 'tst-manager'))[1]['error'] == 'BK-153'

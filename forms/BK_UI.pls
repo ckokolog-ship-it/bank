@@ -1,5 +1,5 @@
 -- BK_UI.pls -- the package UI of the forms of the bank (BK_LOGIN, BK_MAIN, BK_CUSTOMERS, BK_ACCOUNTS, BK_MOVE,
--- BK_DAY, BK_RULES, BK_PRODUCTS, BK_CARDS, BK_CCARDS, BK_ATMS, BK_USERS): mkforms.py puts it in each form. The triggers only call it:
+-- BK_DAY, BK_RULES, BK_PRODUCTS, BK_CARDS, BK_CCARDS, BK_FX, BK_ATMS, BK_USERS): mkforms.py puts it in each form. The triggers only call it:
 --   WHEN-NEW-FORM-INSTANCE   ui.init
 --   WHEN-NEW-RECORD-INSTANCE ui.master(:SYSTEM.TRIGGER_BLOCK)   (a master: its detail again)
 --   WHEN-BUTTON-PRESSED      ui.press(:SYSTEM.TRIGGER_ITEM)   (the toolbar: ui.tool)
@@ -57,9 +57,13 @@ PACKAGE BODY ui IS
     RETURN bk_auth.at_least(g_role, p_need) = 'Y';
   END;
 
-  FUNCTION money(p NUMBER) RETURN VARCHAR2 IS
+  -- (in another currency than the euro: its code)
+  FUNCTION money(p NUMBER, p_cur VARCHAR2 DEFAULT NULL) RETURN VARCHAR2 IS
   BEGIN
-    RETURN to_char(p, 'FM999G999G990D00', 'NLS_NUMERIC_CHARACTERS='',.''') || ' €';
+    IF nvl(p_cur, 'EUR') = 'EUR' THEN
+      RETURN to_char(p, 'FM999G999G990D00', 'NLS_NUMERIC_CHARACTERS='',.''') || ' €';
+    END IF;
+    RETURN to_char(p, 'FM999G999G990D00', 'NLS_NUMERIC_CHARACTERS='',.''') || ' ' || p_cur;
   END;
 
   FUNCTION date_in(p_item VARCHAR2) RETURN DATE IS
@@ -147,15 +151,16 @@ PACKAGE BODY ui IS
     b NUMBER;
     a NUMBER;
     t VARCHAR2(200);
+    c VARCHAR2(3);
   BEGIN
     IF acc IS NULL THEN
       RETURN;
     END IF;
-    SELECT iban || ' ' || holder, balance, CASE WHEN status = 'O' THEN balance + od_limit ELSE 0 END
-    INTO t, b, a FROM bk_account_v WHERE id = acc;
+    SELECT iban || ' ' || holder, balance, CASE WHEN status = 'O' THEN balance + od_limit ELSE 0 END, currency
+    INTO t, b, a, c FROM bk_account_v WHERE id = acc;
     copy(t, 'CTL.M_ACC_TEXT');
-    copy(money(b), 'CTL.M_BAL');
-    copy(money(a), 'CTL.M_AVAIL');
+    copy(money(b, c), 'CTL.M_BAL');
+    copy(money(a, c), 'CTL.M_AVAIL');
     go_block('LAST');
     set_block_property('LAST', DEFAULT_WHERE, 'account_id = ' || to_char(acc));
     execute_query;
@@ -334,9 +339,9 @@ PACKAGE BODY ui IS
         fail('Πρώτα ένας πελάτης στην οθόνη');
       END IF;
       acc := bk_core.open_account(p_product_code => name_in('CTL.A_PRODUCT'), p_customer_id => id_,
-                                  p_od_limit => nvl(num('CTL.A_OD'), 0));
+                                  p_od_limit => nvl(num('CTL.A_OD'), 0), p_currency => name_in('CTL.A_CURRENCY'));
       forms_ddl('COMMIT');
-      SELECT iban INTO t FROM bk_account WHERE id = acc;
+      SELECT iban || ' (' || currency || ')' INTO t FROM bk_account WHERE id = acc;
       g_master := NULL;
       go_block('CA');
       execute_query;
@@ -431,7 +436,18 @@ PACKAGE BODY ui IS
         fail('Κίνηση: DEP, WDR, TRF, OUT ή INC (λίστα)');
       END IF;
       forms_ddl('COMMIT');
-      copy('Εγγραφή #' || e || ' · ' || name_in('CTL.M_KIND_TEXT') || ' ' || money(amt), 'CTL.M_RESULT');
+      SELECT currency INTO k FROM bk_account WHERE id = acc;
+      t := 'Εγγραφή #' || e || ' · ' || name_in('CTL.M_KIND_TEXT') || ' ' || money(amt, k);
+      -- (to an account in another currency: what it got)
+      IF name_in('CTL.M_KIND') = 'TRF' THEN
+        id_ := num('CTL.M_TO_ID');
+        SELECT max(l.credit), max(l.currency) INTO amt, r FROM bk_line l
+        WHERE l.entry_id = e AND l.account_id = id_ AND l.op = 'TRI';
+        IF r <> k THEN
+          t := t || ' → ' || money(amt, r);
+        END IF;
+      END IF;
+      copy(t, 'CTL.M_RESULT');
       copy('', 'CTL.M_AMOUNT');
       copy('', 'CTL.M_DESCR');
       move_refresh;
@@ -505,13 +521,23 @@ PACKAGE BODY ui IS
       IF d < bk_core.open_day THEN
         fail('Ένα επιτόκιο αλλάζει από την εργάσιμη ημέρα και μετά: οι τόκοι των κλεισμένων ημερών δεν ξαναμετριούνται');
       END IF;
-      bk_core.set_rate(id_, d, nvl(num('CTL.N_MIN'), 0), num('CTL.N_RATE'));
+      bk_core.set_rate(id_, d, nvl(num('CTL.N_MIN'), 0), num('CTL.N_RATE'), nvl(name_in('CTL.N_CURRENCY'), 'EUR'));
       forms_ddl('COMMIT');
       g_master := NULL;
       go_block('RATE');
       execute_query;
       go_block(c_block);
       message('Το επιτόκιο αποθηκεύτηκε');
+    ELSIF p_item = 'CTL.SETCURS' THEN
+      id_ := num('PROD.ID');
+      IF id_ IS NULL THEN
+        fail('Πρώτα ένα προϊόν στην οθόνη');
+      END IF;
+      bk_core.set_currencies(name_in('PROD.CODE'), name_in('CTL.P_CURS'));
+      forms_ddl('COMMIT');
+      copy('', 'CTL.P_CURS');
+      requery;
+      message('Τα νομίσματα του προϊόντος άλλαξαν');
 
     -- BK_CARDS: the card on the screen; a new card
     ELSIF p_item IN ('CTL.NEWPIN', 'CTL.BLOCKCARD', 'CTL.ACTIVATE', 'CTL.CANCELCARD') THEN
@@ -585,7 +611,7 @@ PACKAGE BODY ui IS
           IF id_ IS NULL THEN
             fail('Ο λογαριασμός δεν έχει ενεργή κάρτα');
           END IF;
-          e := bk_core.cc_purchase(id_, num('CTL.Q_AMOUNT'), name_in('CTL.Q_MERCHANT'));
+          e := bk_core.cc_purchase(id_, num('CTL.Q_AMOUNT'), name_in('CTL.Q_MERCHANT'), name_in('CTL.Q_CURRENCY'));
           copy('', 'CTL.Q_AMOUNT');
           t := 'Αγορά: εγγραφή #' || e;
         END IF;
@@ -605,6 +631,43 @@ PACKAGE BODY ui IS
       SELECT pan INTO tok FROM bk_card WHERE id = id_;
       copy(t || '   (' || tok || ')', 'CTL.C_RESULT');
       message('Νέα πιστωτική κάρτα ' || tok || ': το PIN για τον κάτοχο, δεν φαίνεται ξανά');
+
+    -- BK_FX: a rate of the currency on the screen; a currency new or changed, active or not; an amount converted
+    ELSIF p_item IN ('CTL.SETFX', 'CTL.TOGGLECUR') THEN
+      id_ := num('CURR.ID');
+      IF id_ IS NULL THEN
+        fail('Πρώτα ένα νόμισμα στην οθόνη');
+      END IF;
+      k := name_in('CURR.CODE');
+      IF p_item = 'CTL.SETFX' THEN
+        bk_core.set_fx_rate(k, date_in('CTL.R_DAY'), num('CTL.R_MID'));
+        copy('', 'CTL.R_MID');
+        t := 'Η ισοτιμία του ' || k || ' αποθηκεύτηκε';
+      ELSE
+        SELECT CASE active WHEN 'Y' THEN 'N' ELSE 'Y' END, name, decimals, spread_pct INTO st, t, amt, e
+        FROM bk_currency WHERE code = k;
+        bk_core.set_currency(k, t, amt, e, st);
+        t := 'Το ' || k || ': ' || CASE st WHEN 'Y' THEN 'ενεργό' ELSE 'ανενεργό' END;
+      END IF;
+      forms_ddl('COMMIT');
+      show_only(id_);
+      message(t);
+    ELSIF p_item = 'CTL.SAVECUR' THEN
+      k := upper(name_in('CTL.S_CODE'));
+      SELECT nvl(max(active), 'Y') INTO st FROM bk_currency WHERE code = k;
+      bk_core.set_currency(k, name_in('CTL.S_NAME'), num('CTL.S_DEC'), num('CTL.S_SPREAD'), st);
+      forms_ddl('COMMIT');
+      SELECT ora_hash(k) INTO id_ FROM dual;
+      show_only(id_);
+      message('Το νόμισμα ' || k || ' αποθηκεύτηκε');
+    ELSIF p_item = 'CTL.CONVERT' THEN
+      amt := num('CTL.X_AMOUNT');
+      IF amt IS NULL OR name_in('CTL.X_FROM') IS NULL OR name_in('CTL.X_TO') IS NULL THEN
+        fail('Ποσό, από νόμισμα, σε νόμισμα');
+      END IF;
+      copy(money(amt, name_in('CTL.X_FROM')) || ' = ' || money(bk_core.fx_convert(amt, name_in('CTL.X_FROM'), name_in('CTL.X_TO')), name_in('CTL.X_TO'))
+           || '  ·  ο πελάτης παίρνει ' || money(bk_core.fx_convert(amt, name_in('CTL.X_FROM'), name_in('CTL.X_TO'), NULL, 'Y'), name_in('CTL.X_TO')),
+           'CTL.X_RESULT');
 
     -- BK_ATMS: a cassette of the ATM on the screen; the notes of all of them
     ELSIF p_item = 'CTL.FILL' THEN
@@ -780,6 +843,12 @@ PACKAGE BODY ui IS
       SELECT nvl(sum(credit - debit), 0) INTO s FROM bk_line
       WHERE account_id = acc AND (entry_id < en OR (entry_id = en AND id <= ln));
       copy(to_char(s), p_block || '.RUN_BALANCE');
+      -- (in another currency: the amount it was in, at its rate)
+      IF name_in(p_block || '.ORIG_CURRENCY') IS NOT NULL AND nvl(name_in(p_block || '.OP'), '-') <> 'FEE' THEN
+        copy(money(num(p_block || '.ORIG_AMOUNT'), name_in(p_block || '.ORIG_CURRENCY')) || ' × '
+             || rtrim(rtrim(to_char(num(p_block || '.FX_RATE'), 'FM999G990D999999', 'NLS_NUMERIC_CHARACTERS='',.'''), '0'), ','),
+             p_block || '.ORIG_TEXT');
+      END IF;
       IF name_in(p_block || '.OP') = 'FEE' THEN
         t := 'Προμήθεια';
       ELSIF k = 'DEP' THEN
