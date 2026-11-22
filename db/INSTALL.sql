@@ -50,6 +50,8 @@ begin
   end if;
 end;
 /
+prompt == the rows of the reports (BK_REPORT)
+@BK_REPORT.sql
 prompt == the words of the forms (BK_TEXT)
 @BK_TEXT.sql
 set define on
@@ -60,9 +62,9 @@ whenever sqlerror exit failure rollback
 declare
   n number;
 begin
-  select count(*) into n from user_errors where name in ('BK_AUTH', 'BK_TEXT');
+  select count(*) into n from user_errors where name in ('BK_AUTH', 'BK_TEXT', 'BK_REPORT');
   if n > 0 then
-    raise_application_error(-20002, 'BK_AUTH or BK_TEXT: ' || n || ' errors (show errors)');
+    raise_application_error(-20002, 'BK_AUTH, BK_TEXT or BK_REPORT: ' || n || ' errors (show errors)');
   end if;
 end;
 /

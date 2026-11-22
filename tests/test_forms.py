@@ -585,3 +585,35 @@ def test_the_menu_by_role(cur):
     run(cur, 'ui.init;', GLOBAL__BK_TOKEN=LOGIN['teller'])
     assert prop(cur, 'CTL.GO_BK_USERS#11') == 'FALSE' and prop(cur, 'MENU SETUP_MENU.USERS#11') == 'FALSE'
     assert prop(cur, 'CTL.GO_BK_CARDS#11') is None
+
+
+@needs_db
+def test_the_reports_of_an_account(cur):
+    """the buttons of the reports: the address of the Reports Server (REPORTS_URL) with the report, the format
+    and its parameters, in a new window; the interest counted first"""
+    compile_ui(cur, 'BK_ACCOUNTS')
+    a = new_account(cur, 100)
+    old = cur.execute("select name, value from bk_setting where name like 'REPORTS%'").fetchall()
+    try:
+        cur.execute("delete from bk_setting where name like 'REPORTS%'")
+        cur.connection.commit()
+        assert 'SET_REPORTS_URL' in fails(cur, "ui.press('CTL.PRINTST');", ACC__ID=str(a), CTL__P_FROM='01/01/2026',
+                                          CTL__P_TO='31/12/2026')
+        cur.execute("insert into bk_setting (name, value) values ('REPORTS_URL', 'http://x:9012/reports/rwservlet?bank')")
+        cur.connection.commit()
+        run(cur, "ui.press('CTL.PRINTST');", ACC__ID=str(a), CTL__P_FROM='01/01/2026', CTL__P_TO='31/12/2026')
+        assert prop(cur, 'SHOW_DOCUMENT') == ('http://x:9012/reports/rwservlet?bank&report=BK_STATEMENT.rdf&destype=cache'
+                                              '&desformat=PDF&P_KIND=S&P_ACCOUNT=%d&P_FROM=01/01/2026&P_TO=31/12/2026 _blank' % a)
+        cur.execute("insert into bk_setting (name, value) values ('REPORTS_FORMAT', 'HTML')")
+        cur.connection.commit()
+        run(cur, "ui.press('CTL.PRINTINT');", ACC__ID=str(a), CTL__P_FROM='1/2/2026', CTL__P_TO='28/02/2026')
+        assert 'BK_INTEREST.rdf&destype=cache&desformat=HTML&P_KIND=I&P_ACCOUNT=%d&P_FROM=01/02/2026&P_TO=28/02/2026' % a \
+            in prop(cur, 'SHOW_DOCUMENT')
+        assert 'Πρώτα' in fails(cur, "ui.press('CTL.PRINTST');", CTL__P_FROM='01/01/2026', CTL__P_TO='31/12/2026')
+        assert 'διάστημα' in fails(cur, "ui.press('CTL.PRINTST');", ACC__ID=str(a), CTL__P_FROM='01/02/2026',
+                                   CTL__P_TO='01/01/2026')
+    finally:
+        cur.execute("delete from bk_setting where name like 'REPORTS%'")
+        for n, v in old:
+            cur.execute('insert into bk_setting (name, value) values (:n, :v)', n=n, v=v)
+        cur.connection.commit()

@@ -1,0 +1,86 @@
+# Τα reports της τράπεζας (Oracle Reports 14)
+
+Τα reports βρίσκονται στον φάκελο `reports/` και φτιάχνονται όπως του mini market:
+- το `mkreports.py` γράφει το report σε XML (μόνο ASCII)·
+- στο forms1, το `build_reports.sh` το μετατρέπει σε `.rdf` (rwconverter) στον φάκελο του Reports Server, `/u01/app/oracle/reports`.
+
+Οι γραμμές τους βγαίνουν από τη βάση, από το πακέτο `BK_REPORT` (`db/BK_REPORT.sql`). Από εκεί έρχονται και τα ελληνικά: ο τίτλος, οι επικεφαλίδες και οι λέξεις.
+
+| Report | Τι δείχνει |
+|---|---|
+| `BK_STATEMENT` | Η **καρτέλα** ενός λογαριασμού σε ένα διάστημα: κάθε γραμμή με ημερομηνία λογισμού και αξίας, την εγγραφή (`#`), το είδος και την περιγραφή, χρέωση, πίστωση και το τρέχον υπόλοιπο. Πρώτα το υπόλοιπο πριν από το διάστημα. Ένας αντιλογισμός σημειώνεται «(αντιλογίστηκε)» |
+| `BK_INTEREST` | Η **εξήγηση των τόκων**: κάθε διάστημα με το ίδιο υπόλοιπο και επιτόκιο, γραμμένο ως «υπόλοιπο × επιτόκιο × ημέρες / ημέρες έτους», με τον τόκο του στην πίστωση (6 δεκαδικά, όπως το `BK_ACCRUAL`). Κάθε κεφαλαιοποίηση εμφανίζεται στη χρέωση (το μικτό ποσό, με τον φόρο και το καθαρό στην περιγραφή). Το «υπόλοιπο» είναι οι δεδουλευμένοι τόκοι που δεν έχουν κεφαλαιοποιηθεί ακόμα |
+
+Και τα δύο έχουν σε κάθε σελίδα:
+- πάνω «Από μεταφορά» και κάτω «Σε μεταφορά»·
+- στο τέλος τα σύνολα του διαστήματος, το υπόλοιπο πριν από αυτό και το υπόλοιπο στο τέλος.
+
+Οι παράμετροί τους:
+- `P_KIND` είναι `S` (καρτέλα) ή `I` (τόκοι)·
+- `P_ACCOUNT` είναι ο κωδικός του λογαριασμού·
+- `P_FROM` και `P_TO` είναι οι ημερομηνίες, `ΗΗ/ΜΜ/ΕΕΕΕ`.
+
+## 1. Στο forms1, μία φορά
+
+Οι φόρμες πρέπει να είναι ήδη στημένες ([ODIGIES_FORMS.md](ODIGIES_FORMS.md): το wallet και το κλειδί `bank` του `cgicmd.dat` τα γράφει το `bk_wallet.sh`).
+
+```bash
+sudo -iu oracle git -C bank pull
+
+# 1. ξανά το INSTALL χωρίς demo: τα δεδομένα μένουν, μπαίνει το BK_REPORT (και οι νέες λέξεις των φορμών)
+sudo -iu oracle bash -c 'cd ~/bank/db && export NLS_LANG=GREEK_GREECE.AL32UTF8 && sqlplus bank@localhost:1521/FREEPDB1 @INSTALL.sql'
+
+# 2. πού ανοίγουν οι φόρμες τα reports (μία φορά): η διεύθυνση του Reports Server και η μορφή (PDF ή HTML)
+sudo -iu oracle bash -c 'cd ~/bank/db && sqlplus /@BK_DB @SET_REPORTS_URL.sql http://forms1.home.lan:9012 PDF'
+
+# 3. τα reports και οι φόρμες: σε session κατευθείαν ως oracle (MobaXterm με X11-forwarding)
+su - oracle
+cd ~/bank/reports && ./build_reports.sh                  # XML -> .rdf στο /u01/app/oracle/reports
+cd ~/bank/forms && ./build_forms.sh /@BK_DB BK_ACCOUNTS    # τα νέα κουμπιά της φόρμας
+```
+
+Αν δεν υπάρχει οθόνη από το session, το `build_reports.sh` χρησιμοποιεί εικονική (`xvfb-run`), όπως και το `build_forms.sh`. Με `XML_DISPLAY=session` ή `XML_DISPLAY=xvfb` διαλέγεις ποια από τις δύο.
+
+Δοκιμή με το χέρι, στον browser:
+
+```
+http://forms1.home.lan:9012/reports/rwservlet?bank&report=BK_STATEMENT.rdf&destype=cache&desformat=PDF&P_KIND=S&P_ACCOUNT=1&P_FROM=01/01/2026&P_TO=31/12/2026
+http://forms1.home.lan:9012/reports/rwservlet?bank&report=BK_INTEREST.rdf&destype=cache&desformat=PDF&P_KIND=I&P_ACCOUNT=2&P_FROM=01/01/2026&P_TO=31/12/2026
+```
+
+Το `?bank` είναι το κλειδί του `cgicmd.dat` (`userid=/@BK_DB`), οπότε στη διεύθυνση δεν υπάρχει κωδικός.
+
+## 2. Από τη φόρμα των λογαριασμών
+
+Στη φόρμα **Λογαριασμοί** (`BK_ACCOUNTS`), κάτω από τις κινήσεις, υπάρχουν:
+- τα πεδία **Από** (η 1η Ιανουαρίου) και **Έως** (σήμερα)·
+- τα κουμπιά **Εκτύπωση καρτέλας** και **Εκτύπωση τόκων**.
+
+Τα κουμπιά ανοίγουν το report του λογαριασμού της οθόνης σε νέο παράθυρο του browser. Η «Εκτύπωση τόκων» πρώτα μετρά τους τόκους ως χθες (`bk_core.accrue`), ώστε να φαίνονται και οι πιο πρόσφατοι.
+
+Αν δεν έχει τρέξει το `SET_REPORTS_URL.sql`, η φόρμα το λέει.
+
+## 3. Πώς είναι φτιαγμένα
+
+Η λογική τους είναι στη βάση: `bk_report.report_rows(p_kind, p_account_id, p_from, p_to)`, pipelined. Κάθε γραμμή έχει:
+- `ldate`, `doc_text`, `descr`, `debit`, `credit`, `balance`·
+- `prior_debit`, `prior_credit`, `prior_balance`: τα σύνολα του διαστήματος πριν από τη γραμμή·
+- `cum_debit`, `cum_credit`: τα σύνολα μαζί με αυτήν.
+
+Το report κρατά την πρώτη `prior_*` κάθε σελίδας (την «Από μεταφορά») και την τελευταία `cum_*` (τη «Σε μεταφορά»). Χωρίς καμία κίνηση στο διάστημα, βγαίνει μία γραμμή: το υπόλοιπο πριν από αυτό.
+
+Μπορείς να τις δεις και από SQL:
+
+```sql
+select * from table(bk_report.report_rows('S', 1, date '2026-11-01', date '2026-11-30'));
+select * from table(bk_report.report_rows('I', 2, date '2026-07-01', date '2026-09-30'));
+```
+
+Στους τόκους, ένα διάστημα που αρχίζει πριν από το `P_FROM` και τελειώνει μέσα του εμφανίζεται ολόκληρο. Οι τόκοι του μετρούν στο διάστημα του report και όχι στο «πριν».
+
+Τα tests είναι στο `tests/test_reports.py`:
+- το XML·
+- οι γραμμές της καρτέλας και των τόκων, απέναντι στο `BK_LINE`, το `BK_ACCRUAL`, το `BK_CAPITAL` και τα δεδουλευμένα του λογαριασμού·
+- οι λέξεις.
+
+Το κουμπί της φόρμας ελέγχεται στο `tests/test_forms.py`.

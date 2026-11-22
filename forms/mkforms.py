@@ -164,7 +164,12 @@ FORMS['BK_ACCOUNTS'] = dict(
          ('CLOSEACC', 'button', 674, 518, 190, 'Κλείσιμο λογαριασμού', {'role': 'MANAGER'}),
          ('R_DESCR', 'text', 10, 566, 260, 'Αιτία αντιλογισμού', {'len': 200}),
          ('REVERSE', 'button', 276, 564, 280, 'Αντιλογισμός της επιλεγμένης κίνησης', {'role': 'MANAGER'}),
-         ('GO_BK_MOVE', 'button', 674, 564, 190, 'Νέα κίνηση', {})])
+         ('GO_BK_MOVE', 'button', 674, 564, 190, 'Νέα κίνηση', {}),
+         # the reports (reports/mkreports.py): the statement and the interest of the account, from - to
+         ('P_FROM', 'date', 10, 612, 100, 'Από', {'year_start': True}),
+         ('P_TO', 'date', 116, 612, 100, 'Έως', {}),
+         ('PRINTST', 'button', 222, 610, 220, 'Εκτύπωση καρτέλας', {}),
+         ('PRINTINT', 'button', 448, 610, 220, 'Εκτύπωση τόκων', {})])
 
 # a movement at the counter (the channel BR): the account (a list), what (a list), the other account or IBAN, the
 # amount, its value date; below, the last moves of the account

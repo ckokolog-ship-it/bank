@@ -67,6 +67,23 @@ PACKAGE BODY ui IS
     RETURN to_date(name_in(p_item), 'DD/MM/YYYY');
   END;
 
+  -- a report of reports/ (the Reports Server: REPORTS_URL of BK_SETTING, db/SET_REPORTS_URL.sql) in a new
+  -- window of the browser, in REPORTS_FORMAT (PDF by default); p_params: &P_...=...
+  PROCEDURE open_report(p_report VARCHAR2, p_params VARCHAR2) IS
+    u VARCHAR2(400);
+    f VARCHAR2(20);
+  BEGIN
+    SELECT max(CASE name WHEN 'REPORTS_URL' THEN value END), max(CASE name WHEN 'REPORTS_FORMAT' THEN value END)
+    INTO u, f FROM bk_setting WHERE name IN ('REPORTS_URL', 'REPORTS_FORMAT');
+    IF u IS NULL THEN
+      fail('Δεν ορίστηκε ο Reports Server (db/SET_REPORTS_URL.sql)');
+    END IF;
+    IF f IS NULL THEN
+      f := 'PDF';
+    END IF;
+    web.show_document(u || '&report=' || p_report || '.rdf&destype=cache&desformat=' || f || p_params, '_blank');
+  END;
+
   -- the login of this form: the token of BK_LOGIN still good (the user active, not locked), and its role at
   -- least the role of the form; else to the login, or back to the first menu. The database knows who it is
   -- (CLIENT_IDENTIFIER: BK_ENTRY.CREATED_BY)
@@ -362,6 +379,25 @@ PACKAGE BODY ui IS
       forms_ddl('COMMIT');
       show_only(acc);
       message(t);
+
+    -- BK_ACCOUNTS: the statement or the interest of the account on the screen (its interest counted first)
+    ELSIF p_item IN ('CTL.PRINTST', 'CTL.PRINTINT') THEN
+      acc := num('ACC.ID');
+      IF acc IS NULL THEN
+        fail('Πρώτα ένας λογαριασμός στην οθόνη');
+      END IF;
+      IF name_in('CTL.P_FROM') IS NULL OR name_in('CTL.P_TO') IS NULL OR date_in('CTL.P_FROM') > date_in('CTL.P_TO') THEN
+        fail('Το διάστημα: από - έως (ΗΗ/ΜΜ/ΕΕΕΕ)');
+      END IF;
+      t := '&P_ACCOUNT=' || acc || '&P_FROM=' || to_char(date_in('CTL.P_FROM'), 'DD/MM/YYYY')
+           || '&P_TO=' || to_char(date_in('CTL.P_TO'), 'DD/MM/YYYY');
+      IF p_item = 'CTL.PRINTINT' THEN
+        bk_core.accrue(acc);
+        forms_ddl('COMMIT');
+        open_report('BK_INTEREST', '&P_KIND=I' || t);
+      ELSE
+        open_report('BK_STATEMENT', '&P_KIND=S' || t);
+      END IF;
 
     -- BK_MOVE: the account; a movement
     ELSIF p_item = 'CTL.SHOWACC' THEN

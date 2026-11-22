@@ -3,6 +3,7 @@
 set feedback off
 whenever sqlerror continue
 drop package if exists bk_auth;
+drop package if exists bk_report;
 drop package if exists bk_text;
 drop package if exists bk_core;
 drop view if exists bk_account_v;
