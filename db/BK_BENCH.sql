@@ -71,14 +71,17 @@ begin
   insert /*+ append */ into bk_entry (id, kind, book_date, value_date, descr, channel)
   select e0 + cnt + r, 'DEP', d1, d1 + 1, 'Bench, value 31/12', 'BR' from bk_bench_n where r <= ceil(cnt / 10);
   commit;
-  insert /*+ append */ into bk_line (entry_id, account_id, gl_code, debit, credit, op, value_date)
-  select e0 + r, null, 'CASH', 100 + mod(r * 7919, 49900), 0, null, d1 from bk_bench_n where r <= cnt
+  -- (in EUR, the base currency: each line the same in it)
+  insert /*+ append */ into bk_line (entry_id, account_id, gl_code, debit, credit, op, value_date, base_debit, base_credit)
+  select x.*, x.debit, x.credit from (
+  select e0 + r entry_id, null account_id, 'CASH' gl_code, 100 + mod(r * 7919, 49900) debit, 0 credit, null op, d1 value_date
+  from bk_bench_n where r <= cnt
   union all
   select e0 + r, a0 + r, null, 0, 100 + mod(r * 7919, 49900), 'DEP', d1 from bk_bench_n where r <= cnt
   union all
   select e0 + cnt + r, null, 'CASH', 500, 0, null, d1 + 1 from bk_bench_n where r <= ceil(cnt / 10)
   union all
-  select e0 + cnt + r, a0 + (r - 1) * 10 + 1, null, 0, 500, 'DEP', d1 + 1 from bk_bench_n where r <= ceil(cnt / 10);
+  select e0 + cnt + r, a0 + (r - 1) * 10 + 1, null, 0, 500, 'DEP', d1 + 1 from bk_bench_n where r <= ceil(cnt / 10)) x;
   commit;
   merge into bk_account a
   using (select account_id, sum(credit - debit) b from bk_line where account_id > a0 group by account_id) x

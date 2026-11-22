@@ -42,14 +42,31 @@ create or replace package bk_core as
                             p_email varchar2, p_address varchar2, p_birth_date date, p_id_card varchar2,
                             p_active varchar2 default 'Y');
 
-  -- the products and their rates (% a year, from a day on, by tier)
-  procedure set_rate(p_product_id number, p_valid_from date, p_min_balance number, p_rate number);
-  function rate_of(p_product_id number, p_day date, p_balance number) return number;
+  -- the currencies: the base currency of the bank (BASE_CURRENCY: every line in it too); a currency, its decimals
+  -- and the margin of the bank on a conversion (SPREAD_PCT, each side of the mid rate); its rate from a day on
+  -- (MID: how many of it 1 of the base currency buys); the rate of a day (the latest on or before it; the base
+  -- currency: 1); an amount converted (at the mid rate; p_customer Y: as the customer gets it, less the margin of
+  -- each currency that is not the base one), rounded to the decimals of p_to
+  function base_currency return varchar2;
+  procedure set_currency(p_code varchar2, p_name varchar2, p_decimals number default 2, p_spread_pct number default 0.5,
+                         p_active varchar2 default 'Y');
+  procedure set_fx_rate(p_currency varchar2, p_day date, p_mid number);
+  function fx_rate(p_currency varchar2, p_day date default null) return number;
+  function fx_convert(p_amount number, p_from varchar2, p_to varchar2, p_day date default null,
+                      p_customer varchar2 default 'N') return number;
+  -- the currencies a product opens in ('EUR,USD': the first one by default)
+  procedure set_currencies(p_product_code varchar2, p_currencies varchar2);
 
-  -- the accounts: opened on the business day for a customer (its primary holder), joint holders, closed
-  -- (its balance 0: its interest capitalized first), blocked (nothing out) or open again
+  -- the products and their rates (% a year, from a day on, by tier, in a currency)
+  procedure set_rate(p_product_id number, p_valid_from date, p_min_balance number, p_rate number,
+                     p_currency varchar2 default 'EUR');
+  function rate_of(p_product_id number, p_day date, p_balance number, p_currency varchar2 default 'EUR') return number;
+
+  -- the accounts: opened on the business day for a customer (its primary holder), in a currency of its product
+  -- (null: the first of them), joint holders, closed (its balance 0: its interest capitalized first), blocked
+  -- (nothing out) or open again. Every amount of an account (its movements, its rules, its limits) in its currency
   function open_account(p_product_code varchar2, p_customer_id number, p_od_limit number default 0,
-                        p_name varchar2 default null) return number;
+                        p_name varchar2 default null, p_currency varchar2 default null) return number;
   procedure add_holder(p_account_id number, p_customer_id number);
   procedure remove_holder(p_account_id number, p_customer_id number);
   procedure set_status(p_account_id number, p_status varchar2);
@@ -144,10 +161,14 @@ create or replace package bk_core as
   function cc_available(p_account_id number) return number;
   -- a purchase: its authorization (the amount held, within what may be spent: its id back), then posted (the
   -- amount, up to that held; null: all of it: its entry PUR back) or released. cc_purchase: both at once
-  function cc_authorize(p_card_id number, p_amount number, p_merchant varchar2 default null) return number;
+  -- p_currency: the currency of the purchase, if not that of the card (abroad): converted at the mid rate, with
+  -- the fee of conversion of its product (FX_FEE_PCT); the entry keeps the amount and the currency it was in
+  function cc_authorize(p_card_id number, p_amount number, p_merchant varchar2 default null,
+                        p_currency varchar2 default null) return number;
   function cc_capture(p_auth_id number, p_amount number default null) return number;
   procedure cc_release(p_auth_id number);
-  function cc_purchase(p_card_id number, p_amount number, p_merchant varchar2 default null) return number;
+  function cc_purchase(p_card_id number, p_amount number, p_merchant varchar2 default null,
+                       p_currency varchar2 default null) return number;
   -- a payment of a card from an account of the bank (a transfer: its rules); in cash: deposit to its account
   function cc_pay(p_account_id number, p_from_account_id number, p_amount number, p_channel varchar2 default 'BR') return number;
   -- the end of a day for the credit cards (close_day calls it): the authorizations older than CC_HOLD_DAYS
@@ -284,8 +305,129 @@ create or replace package body bk_core as
   end;
 
   -- ---------------------------------------------------------------------------------------------
-  procedure set_rate(p_product_id number, p_valid_from date, p_min_balance number, p_rate number) is
+  -- the currencies
+  function base_currency return varchar2 is
   begin
+    return nvl(setting('BASE_CURRENCY'), 'EUR');
+  end;
+
+  procedure currency_ok(p_code varchar2) is
+    n number;
+  begin
+    select count(*) into n from bk_currency where code = upper(p_code) and active = 'Y';
+    if n = 0 then
+      fail(52, 'Δεν υπάρχει ενεργό νόμισμα ' || p_code);
+    end if;
+  end;
+
+  procedure set_currency(p_code varchar2, p_name varchar2, p_decimals number default 2, p_spread_pct number default 0.5,
+                         p_active varchar2 default 'Y') is
+  begin
+    if p_code is null or not regexp_like(upper(p_code), '^[A-Z]{3}$') or p_name is null
+       or nvl(p_decimals, -1) not between 0 and 3 or nvl(p_spread_pct, -1) not between 0 and 10
+       or nvl(p_active, '-') not in ('Y', 'N') then
+      fail(52, 'Νόμισμα: κωδικός 3 γραμμάτων (ISO), όνομα, δεκαδικά 0 - 3, περιθώριο 0 - 10 %');
+    end if;
+    if upper(p_code) = base_currency and (p_active = 'N' or p_spread_pct <> 0) then
+      fail(52, 'Το βασικό νόμισμα ' || base_currency || ' μένει ενεργό, χωρίς περιθώριο');
+    end if;
+    merge into bk_currency c
+    using (select upper(p_code) code from dual) v on (c.code = v.code)
+    when matched then update set name = p_name, decimals = p_decimals, spread_pct = p_spread_pct, active = p_active
+    when not matched then insert (code, name, decimals, spread_pct, active)
+                          values (v.code, p_name, p_decimals, p_spread_pct, p_active);
+  end;
+
+  procedure set_fx_rate(p_currency varchar2, p_day date, p_mid number) is
+  begin
+    currency_ok(p_currency);
+    if upper(p_currency) = base_currency then
+      fail(52, 'Το βασικό νόμισμα ' || base_currency || ' δεν έχει ισοτιμία (1)');
+    end if;
+    if p_day is null or nvl(p_mid, 0) <= 0 then
+      fail(52, 'Η ισοτιμία: μια ημέρα και μια τιμή πάνω από 0');
+    end if;
+    merge into bk_fx_rate r
+    using (select upper(p_currency) currency, trunc(p_day) day from dual) v on (r.currency = v.currency and r.day = v.day)
+    when matched then update set mid = p_mid
+    when not matched then insert (currency, day, mid) values (v.currency, v.day, p_mid);
+  end;
+
+  function fx_rate(p_currency varchar2, p_day date default null) return number is
+    d date := trunc(nvl(p_day, open_day));
+    v number;
+  begin
+    if upper(p_currency) = base_currency then
+      return 1;
+    end if;
+    select max(mid) keep (dense_rank last order by day) into v
+    from bk_fx_rate where currency = upper(p_currency) and day <= d;
+    if v is null then
+      fail(52, 'Δεν υπάρχει ισοτιμία του ' || p_currency || ' για τις ' || to_char(d, 'DD/MM/YYYY'));
+    end if;
+    return v;
+  end;
+
+  function fx_convert(p_amount number, p_from varchar2, p_to varchar2, p_day date default null,
+                      p_customer varchar2 default 'N') return number is
+    v number;
+    s1 number := 0;
+    s2 number := 0;
+    dec_ number;
+  begin
+    select decimals into dec_ from bk_currency where code = upper(p_to);
+    if upper(p_from) = upper(p_to) then
+      return round(p_amount, dec_);
+    end if;
+    v := p_amount / fx_rate(p_from, p_day) * fx_rate(p_to, p_day);
+    if p_customer = 'Y' then
+      select spread_pct into s1 from bk_currency where code = upper(p_from);
+      select spread_pct into s2 from bk_currency where code = upper(p_to);
+      v := v * (1 - s1 / 100) * (1 - s2 / 100);
+    end if;
+    return round(v, dec_);
+  exception
+    when no_data_found then
+      fail(52, 'Δεν υπάρχει νόμισμα ' || p_from || ' ή ' || p_to);
+  end;
+
+  procedure set_currencies(p_product_code varchar2, p_currencies varchar2) is
+    l varchar2(200) := upper(regexp_replace(p_currencies, '\s', ''));
+    c varchar2(3);
+    n number;
+  begin
+    if l is null or not regexp_like(l, '^[A-Z]{3}(,[A-Z]{3})*$') then
+      fail(53, 'Τα νομίσματα του προϊόντος: κωδικοί με κόμμα (π.χ. EUR,USD)');
+    end if;
+    for i in 1 .. regexp_count(l, ',') + 1 loop
+      c := regexp_substr(l, '[^,]+', 1, i);
+      currency_ok(c);
+      if instr(',' || l || ',', ',' || c || ',', 1, 2) > 0 then          -- (instr: the commas shared)
+        fail(53, 'Το νόμισμα ' || c || ' δύο φορές');
+      end if;
+    end loop;
+    update bk_product set currencies = l where code = upper(p_product_code);
+    if sql%rowcount = 0 then
+      fail(10, 'Δεν υπάρχει προϊόν ' || p_product_code);
+    end if;
+    select count(*) into n from bk_product where code = upper(p_product_code) and kind = 'CC' and l like '%,%';
+    if n > 0 then
+      fail(53, 'Μια πιστωτική κάρτα έχει ένα νόμισμα');
+    end if;
+  end;
+
+  function cur_of(p_account_id number) return varchar2 is
+    c varchar2(3);
+  begin
+    select currency into c from bk_account where id = p_account_id;
+    return c;
+  end;
+
+  -- ---------------------------------------------------------------------------------------------
+  procedure set_rate(p_product_id number, p_valid_from date, p_min_balance number, p_rate number,
+                     p_currency varchar2 default 'EUR') is
+  begin
+    currency_ok(p_currency);
     if p_rate is null or p_rate < 0 or p_rate > 100 then
       fail(7, 'Το επιτόκιο: από 0 ως 100 %');
     end if;
@@ -293,13 +435,15 @@ create or replace package body bk_core as
       fail(7, 'Το κλιμάκιο: από 0 και πάνω');
     end if;
     merge into bk_rate r
-    using (select p_product_id product_id, trunc(p_valid_from) valid_from, nvl(p_min_balance, 0) min_balance from dual) v
-    on (r.product_id = v.product_id and r.valid_from = v.valid_from and r.min_balance = v.min_balance)
+    using (select p_product_id product_id, upper(p_currency) currency, trunc(p_valid_from) valid_from,
+                  nvl(p_min_balance, 0) min_balance from dual) v
+    on (r.product_id = v.product_id and r.currency = v.currency and r.valid_from = v.valid_from and r.min_balance = v.min_balance)
     when matched then update set r.rate = p_rate
-    when not matched then insert (product_id, valid_from, min_balance, rate) values (v.product_id, v.valid_from, v.min_balance, p_rate);
+    when not matched then insert (product_id, currency, valid_from, min_balance, rate)
+                          values (v.product_id, v.currency, v.valid_from, v.min_balance, p_rate);
   end;
 
-  function rate_of(p_product_id number, p_day date, p_balance number) return number is
+  function rate_of(p_product_id number, p_day date, p_balance number, p_currency varchar2 default 'EUR') return number is
     v number;
     od number;
   begin
@@ -310,9 +454,10 @@ create or replace package body bk_core as
     -- the rates in force that day (the latest VALID_FROM of each tier), the highest tier it reaches
     select max(rate) keep (dense_rank last order by min_balance) into v
     from bk_rate r
-    where r.product_id = p_product_id and r.min_balance <= p_balance
+    where r.product_id = p_product_id and r.currency = upper(p_currency) and r.min_balance <= p_balance
       and r.valid_from = (select max(x.valid_from) from bk_rate x
-                          where x.product_id = r.product_id and x.min_balance = r.min_balance and x.valid_from <= p_day);
+                          where x.product_id = r.product_id and x.currency = r.currency and x.min_balance = r.min_balance
+                            and x.valid_from <= p_day);
     return nvl(v, 0);
   end;
 
@@ -340,9 +485,10 @@ create or replace package body bk_core as
   end;
 
   function open_account(p_product_code varchar2, p_customer_id number, p_od_limit number default 0,
-                        p_name varchar2 default null) return number is
+                        p_name varchar2 default null, p_currency varchar2 default null) return number is
     p bk_product%rowtype;
     v number;
+    cur varchar2(3);
   begin
     begin
       select * into p from bk_product where code = upper(p_product_code) and active = 'Y';
@@ -356,8 +502,14 @@ create or replace package body bk_core as
     if nvl(p_od_limit, 0) > 0 and p.kind <> 'CUR' then
       fail(11, 'Υπερανάληψη μόνο σε λογαριασμό όψεως');
     end if;
-    insert into bk_account (iban, product_id, name, opened_on, od_limit)
-    values ('GR' || lpad('0', 25, '0'), p.id, p_name, open_day, nvl(p_od_limit, 0))
+    cur := upper(nvl(p_currency, regexp_substr(p.currencies, '[^,]+', 1, 1)));
+    if instr(',' || p.currencies || ',', ',' || cur || ',') = 0 then
+      fail(53, 'Το προϊόν ' || p.code || ' ανοίγει σε ' || replace(p.currencies, ',', ', ') || ', όχι σε ' || cur);
+    end if;
+    currency_ok(cur);
+    v := fx_rate(cur);                            -- (a rate of it there: every line in the base currency too)
+    insert into bk_account (iban, product_id, name, opened_on, od_limit, currency)
+    values ('GR' || lpad('0', 25, '0'), p.id, p_name, open_day, nvl(p_od_limit, 0), cur)
     returning id into v;
     update bk_account set iban = new_iban(v) where id = v;
     insert into bk_holder (account_id, customer_id, role) values (v, p_customer_id, 'P');
@@ -428,12 +580,27 @@ create or replace package body bk_core as
     return v;
   end;
 
+  -- a line in the currency of its account; of an account of the bank in p_currency (null: that of the last line
+  -- of an account of the entry, else the base currency); and in the base currency, at the rate of its book date
   procedure line(p_entry_id number, p_account_id number, p_gl_code varchar2, p_debit number, p_credit number,
-                 p_op varchar2 default null) is
+                 p_op varchar2 default null, p_currency varchar2 default null) is
+    cur varchar2(3) := upper(p_currency);
+    bd date;
+    vd date;
+    r number;
   begin
-    insert into bk_line (entry_id, account_id, gl_code, debit, credit, op, value_date)
-    values (p_entry_id, p_account_id, p_gl_code, nvl(p_debit, 0), nvl(p_credit, 0), p_op,
-            (select value_date from bk_entry where id = p_entry_id));
+    select book_date, value_date into bd, vd from bk_entry where id = p_entry_id;
+    if p_account_id is not null then
+      cur := cur_of(p_account_id);
+    elsif cur is null then
+      select max(currency) keep (dense_rank last order by id) into cur
+      from bk_line where entry_id = p_entry_id and account_id is not null;
+    end if;
+    cur := nvl(cur, base_currency);
+    r := fx_rate(cur, bd);
+    insert into bk_line (entry_id, account_id, gl_code, debit, credit, op, value_date, currency, base_debit, base_credit)
+    values (p_entry_id, p_account_id, p_gl_code, nvl(p_debit, 0), nvl(p_credit, 0), p_op, vd, cur,
+            round(nvl(p_debit, 0) / r, 2), round(nvl(p_credit, 0) / r, 2));
     if p_account_id is not null then
       update bk_account set balance = balance + nvl(p_credit, 0) - nvl(p_debit, 0) where id = p_account_id;
     end if;
@@ -467,7 +634,8 @@ create or replace package body bk_core as
     end if;
     if a.balance + a.od_limit < p_amount then
       fail(19, 'Δεν φτάνει το υπόλοιπο του ' || a.iban || ': διαθέσιμα '
-               || to_char(a.balance + a.od_limit, 'FM999G999G990D00', q'[NLS_NUMERIC_CHARACTERS=',.']') || ' €');
+               || to_char(a.balance + a.od_limit, 'FM999G999G990D00', q'[NLS_NUMERIC_CHARACTERS=',.']')
+               || case when a.currency = 'EUR' then ' €' else ' ' || a.currency end);
     end if;
   exception
     when no_data_found then
@@ -500,9 +668,11 @@ create or replace package body bk_core as
 
   -- ---------------------------------------------------------------------------------------------
   -- the rules of the movements
-  function money_text(p number) return varchar2 is
+  -- (in another currency than the euro: its code)
+  function money_text(p number, p_cur varchar2 default null) return varchar2 is
   begin
-    return to_char(p, 'FM999G999G990D00', q'[NLS_NUMERIC_CHARACTERS=',.']') || ' €';
+    return to_char(p, 'FM999G999G990D00', q'[NLS_NUMERIC_CHARACTERS=',.']')
+           || case when nvl(p_cur, 'EUR') = 'EUR' then ' €' else ' ' || p_cur end;
   end;
 
   function op_text(p_op varchar2) return varchar2 is
@@ -594,20 +764,21 @@ create or replace package body bk_core as
     fee number;
     iban_ varchar2(27);
     where_ varchar2(40);
+    cur varchar2(3);
   begin
     channel_ok(p_channel);
-    select iban into iban_ from bk_account where id = p_account_id;
+    select iban, currency into iban_, cur from bk_account where id = p_account_id;
     resolve(p_account_id, p_op, p_channel, 'ALLOWED', v, sc);
     if v = 0 then
       fail(26, 'Δεν επιτρέπεται ' || op_text(p_op) || ' ' || channel_text(p_channel) || ' στον ' || iban_);
     end if;
     resolve(p_account_id, p_op, p_channel, 'MIN_AMOUNT', v, sc);
     if p_amount < v then
-      fail(27, 'Η ' || op_text(p_op) || ' ' || channel_text(p_channel) || ' είναι από ' || money_text(v));
+      fail(27, 'Η ' || op_text(p_op) || ' ' || channel_text(p_channel) || ' είναι από ' || money_text(v, cur));
     end if;
     resolve(p_account_id, p_op, p_channel, 'MAX_AMOUNT', v, sc);
     if p_amount > v then
-      fail(27, 'Η ' || op_text(p_op) || ' ' || channel_text(p_channel) || ' είναι ως ' || money_text(v));
+      fail(27, 'Η ' || op_text(p_op) || ' ' || channel_text(p_channel) || ' είναι ως ' || money_text(v, cur));
     end if;
     for k in (select column_value attr from table(sys.odcivarchar2list('DAY_AMOUNT', 'DAY_COUNT', 'MONTH_AMOUNT', 'MONTH_COUNT'))) loop
       resolve(p_account_id, p_op, p_channel, k.attr, v, sc);
@@ -617,7 +788,7 @@ create or replace package body bk_core as
         if k.attr like '%AMOUNT' and u + p_amount > v then
           fail(case when k.attr like 'DAY%' then 28 else 29 end,
                'Ξεπερνά το ' || case when k.attr like 'DAY%' then 'ημερήσιο' else 'μηνιαίο' end || ' όριο: ' || op_text(p_op)
-               || ' ' || where_ || ', έχουν γίνει ' || money_text(u) || ', όριο ' || money_text(v));
+               || ' ' || where_ || ', έχουν γίνει ' || money_text(u, cur) || ', όριο ' || money_text(v, cur));
         elsif k.attr like '%COUNT' and u + 1 > v then
           fail(case when k.attr like 'DAY%' then 28 else 29 end,
                'Ξεπερνά το ' || case when k.attr like 'DAY%' then 'ημερήσιο' else 'μηνιαίο' end || ' όριο: ' || op_text(p_op)
@@ -644,8 +815,8 @@ create or replace package body bk_core as
   begin
     resolve(p_account_id, p_op, p_channel, 'MIN_BALANCE', v, sc);
     if v is not null and a.balance - p_out < v then
-      fail(30, 'Στον ' || a.iban || ' πρέπει να μένουν τουλάχιστον ' || money_text(v) || ': διαθέσιμα για '
-               || op_text(p_op) || ' ' || money_text(greatest(a.balance - v, 0)));
+      fail(30, 'Στον ' || a.iban || ' πρέπει να μένουν τουλάχιστον ' || money_text(v, a.currency) || ': διαθέσιμα για '
+               || op_text(p_op) || ' ' || money_text(greatest(a.balance - v, 0), a.currency));
     end if;
   end;
 
@@ -669,7 +840,7 @@ create or replace package body bk_core as
     into_ok(account_row(p_account_id));
     fee := rules_ok(p_account_id, 'DEP', p_channel, p_amount);
     e := new_entry('DEP', p_value_date, nvl(p_descr, 'Κατάθεση'), null, p_channel);
-    line(e, null, 'CASH', p_amount, 0);
+    line(e, null, 'CASH', p_amount, 0, null, cur_of(p_account_id));
     line(e, p_account_id, null, 0, p_amount, 'DEP');
     charge(e, p_account_id, fee);
     return e;
@@ -697,6 +868,10 @@ create or replace package body bk_core as
     e number;
     fee number;
     fee_to number;
+    ca varchar2(3);
+    cb varchar2(3);
+    amt_to number;
+    mid_to number;
   begin
     amount_ok(p_amount);
     if p_from_id = p_to_id then
@@ -704,13 +879,35 @@ create or replace package body bk_core as
     end if;
     lock_accounts(p_from_id, p_to_id);
     into_ok(account_row(p_to_id));
+    -- two currencies: the amount of the other one as the customer gets it (less the margin of the bank)
+    ca := cur_of(p_from_id);
+    cb := cur_of(p_to_id);
+    amt_to := case when ca = cb then p_amount else fx_convert(p_amount, ca, cb, null, 'Y') end;
+    if amt_to <= 0 then
+      fail(17, 'Το ποσό: πάνω από 0 και σε ' || cb);
+    end if;
     fee := rules_ok(p_from_id, 'TRO', p_channel, p_amount);
-    fee_to := rules_ok(p_to_id, 'TRI', p_channel, p_amount);
+    fee_to := rules_ok(p_to_id, 'TRI', p_channel, amt_to);
     out_ok(p_from_id, p_amount + fee);
     floor_ok(p_from_id, 'TRO', p_channel, p_amount + fee);
     e := new_entry('TRF', p_value_date, nvl(p_descr, 'Μεταφορά'), null, p_channel);
     line(e, p_from_id, null, p_amount, 0, 'TRO');
-    line(e, p_to_id, null, 0, p_amount, 'TRI');
+    if ca = cb then
+      line(e, p_to_id, null, 0, p_amount, 'TRI');
+    else
+      -- each currency balanced through the position of the bank in it (FX_POS, at the mid rate); the margin its
+      -- income (FX_INC)
+      mid_to := fx_convert(p_amount, ca, cb);
+      line(e, null, 'FX_POS', 0, p_amount, null, ca);
+      line(e, null, 'FX_POS', mid_to, 0, null, cb);
+      line(e, p_to_id, null, 0, amt_to, 'TRI');
+      if mid_to > amt_to then
+        line(e, null, 'FX_INC', 0, mid_to - amt_to, null, cb);
+      elsif mid_to < amt_to then
+        line(e, null, 'FX_INC', amt_to - mid_to, 0, null, cb);
+      end if;
+      update bk_entry set orig_amount = p_amount, orig_currency = ca, fx_rate = round(amt_to / p_amount, 8) where id = e;
+    end if;
     charge(e, p_from_id, fee);
     charge(e, p_to_id, fee_to);
     return e;
@@ -749,7 +946,7 @@ create or replace package body bk_core as
     into_ok(account_row(p_to_id));
     fee := rules_ok(p_to_id, 'INC', p_channel, p_amount);
     e := new_entry('INC', p_value_date, nvl(p_descr, 'Μεταφορά από ' || replace(upper(p_iban_from), ' ')), null, p_channel);
-    line(e, null, 'CLEAR', p_amount, 0);
+    line(e, null, 'CLEAR', p_amount, 0, null, cur_of(p_to_id));
     line(e, p_to_id, null, 0, p_amount, 'INC');
     charge(e, p_to_id, fee);
     return e;
@@ -851,8 +1048,8 @@ create or replace package body bk_core as
       end if;
     end loop;
     e := new_entry('REV', null, nvl(p_descr, 'Αντιλογισμός της κίνησης ' || p_entry_id), p_entry_id);
-    for l in (select account_id, gl_code, debit, credit, op from bk_line where entry_id = p_entry_id order by id) loop
-      line(e, l.account_id, l.gl_code, l.credit, l.debit, l.op);
+    for l in (select account_id, gl_code, debit, credit, op, currency from bk_line where entry_id = p_entry_id order by id) loop
+      line(e, l.account_id, l.gl_code, l.credit, l.debit, l.op, l.currency);
     end loop;
     return e;
   end;
@@ -901,7 +1098,7 @@ create or replace package body bk_core as
     delete from bk_accrual_new;
     insert into bk_accrual_new (account_id, day_from, day_to, balance, rate, days, year_days, interest)
     with acc as (
-      select a.id, a.product_id, a.balance, p.day_basis, p.od_rate, nvl(a.accrued_to, a.opened_on - 1) at0
+      select a.id, a.product_id, a.currency, a.balance, p.day_basis, p.od_rate, nvl(a.accrued_to, a.opened_on - 1) at0
       from bk_account a join bk_product p on p.id = a.product_id
       where a.id between p_lo and p_hi and a.status <> 'C' and a.opened_on <= p_day and p.kind <> 'CC'
         and nvl(a.accrued_to, a.opened_on - 1) < p_day and instr(p_caps, p.cap_every) > 0),
@@ -917,25 +1114,25 @@ create or replace package body bk_core as
       union
       select id, day from ev where day <= p_day
       union
-      select acc.id, r.valid_from from acc join bk_rate r on r.product_id = acc.product_id
+      select acc.id, r.valid_from from acc join bk_rate r on r.product_id = acc.product_id and r.currency = acc.currency
       where r.valid_from > acc.at0 + 1 and r.valid_from <= p_day),
     seg as (
       select id, b f, nvl(lead(b) over (partition by id order by b) - 1, p_day) t from pts),
     -- its balance by value date in a stretch: its balance now less what has a later value date
     sv as (
-      select s.id, s.f, s.t, acc.product_id, acc.day_basis, acc.od_rate, acc.balance - nvl(sum(ev.amt), 0) vb
+      select s.id, s.f, s.t, acc.product_id, acc.currency, acc.day_basis, acc.od_rate, acc.balance - nvl(sum(ev.amt), 0) vb
       from seg s join acc on acc.id = s.id left join ev on ev.id = s.id and ev.day > s.f
-      group by s.id, s.f, s.t, acc.product_id, acc.day_basis, acc.od_rate, acc.balance),
+      group by s.id, s.f, s.t, acc.product_id, acc.currency, acc.day_basis, acc.od_rate, acc.balance),
     -- the rates: each tier from its VALID_FROM to the next one of it (rate_of)
     rt as (
-      select product_id, min_balance, rate, valid_from vf,
-             lead(valid_from) over (partition by product_id, min_balance order by valid_from) vn
+      select product_id, currency, min_balance, rate, valid_from vf,
+             lead(valid_from) over (partition by product_id, currency, min_balance order by valid_from) vn
       from bk_rate),
     sr as (
       select sv.*,
              case when sv.vb < 0 then sv.od_rate
                   else nvl((select max(rt.rate) keep (dense_rank last order by rt.min_balance) from rt
-                            where rt.product_id = sv.product_id and rt.min_balance <= sv.vb and rt.vf <= sv.f
+                            where rt.product_id = sv.product_id and rt.currency = sv.currency and rt.min_balance <= sv.vb and rt.vf <= sv.f
                               and (rt.vn is null or rt.vn > sv.f)), 0) end rate,
              case sv.day_basis when 'ACT365' then 365 else 360 end yd
       from sv),
@@ -975,6 +1172,7 @@ create or replace package body bk_core as
   -- entries from the sequence of BK_ENTRY itself (its identity), to tie their lines to them
   procedure capitalize_range(p_lo number, p_hi number, p_day date, p_caps varchar2) is
     seq varchar2(128);
+    b varchar2(3) := base_currency;
   begin
     select sequence_name into seq from user_tab_identity_cols where table_name = 'BK_ENTRY' and column_name = 'ID';
     delete from bk_capital_new;
@@ -995,14 +1193,19 @@ create or replace package body bk_core as
     from bk_capital_new;
     -- its lines, in the order of capitalize: INT_EXP, the account (gross), the account (tax), TAX; or the account
     -- and INT_INC
-    insert into bk_line (entry_id, account_id, gl_code, debit, credit, value_date)
-    select entry_id, account_id, gl_code, debit, credit, p_day
-    from (select c.entry_id, k.n,
+    -- (each in the currency of its account, and in the base currency at the rate of the day)
+    insert into bk_line (entry_id, account_id, gl_code, debit, credit, value_date, currency, base_debit, base_credit)
+    select entry_id, account_id, gl_code, debit, credit, p_day, cur,
+           case when r is null then debit else round(debit / r, 2) end, case when r is null then credit else round(credit / r, 2) end
+    from (select c.entry_id, k.n, a.currency cur,
+                 case when a.currency <> b then (select max(f.mid) keep (dense_rank last order by f.day) from bk_fx_rate f
+                                                 where f.currency = a.currency and f.day <= p_day) end r,
                  case when k.n in (2, 3, 5) then c.account_id end account_id,
                  case k.n when 1 then 'INT_EXP' when 4 then 'TAX' when 6 then 'INT_INC' end gl_code,
                  case k.n when 1 then c.gross when 3 then c.tax when 5 then -c.gross else 0 end debit,
                  case k.n when 2 then c.gross when 4 then c.tax when 6 then -c.gross else 0 end credit
           from bk_capital_new c
+          join bk_account a on a.id = c.account_id
           join (select level n from dual connect by level <= 6) k
             on (c.gross > 0 and (k.n in (1, 2) or (k.n in (3, 4) and c.tax > 0))) or (c.gross < 0 and k.n in (5, 6))
           order by c.entry_id, k.n);
@@ -1042,7 +1245,7 @@ create or replace package body bk_core as
     values ('INT', p_day, p_day, 'SYS', descr_)
     returning id into e;
     if gross > 0 then
-      line(e, null, 'INT_EXP', gross, 0);
+      line(e, null, 'INT_EXP', gross, 0, null, a.currency);
       line(e, p_account_id, null, 0, gross);
       if tax > 0 then
         line(e, p_account_id, null, tax, 0);
@@ -1075,7 +1278,7 @@ create or replace package body bk_core as
       from bk_line l join bk_entry e on e.id = l.entry_id
       where l.account_id = p_account_id and l.value_date <= d and not (e.kind = 'INT' and e.book_date = d);
       day_count(basis, d, days_, year_);
-      s := s + round(vb * rate_of(a.product_id, d, vb) / 100 * days_ / year_, 6);
+      s := s + round(vb * rate_of(a.product_id, d, vb, a.currency) / 100 * days_ / year_, 6);
       d := d + 1;
     end loop;
     return s;
@@ -1119,7 +1322,7 @@ create or replace package body bk_core as
     select * into a from bk_account where id = p_account_id;
     if a.balance <> 0 then
       fail(25, 'Ο λογαριασμός ' || a.iban || ' έχει υπόλοιπο '
-               || to_char(a.balance, 'FM999G999G990D00', q'[NLS_NUMERIC_CHARACTERS=',.']') || ' €: ανάληψη ή μεταφορά του πρώτα');
+               || money_text(a.balance, a.currency) || ': ανάληψη ή μεταφορά του πρώτα');
     end if;
     select count(*) into e from bk_entry x join bk_line l on l.entry_id = x.id
     where l.account_id = p_account_id and x.value_date > d;
@@ -1417,6 +1620,9 @@ create or replace package body bk_core as
     e number;
   begin
     amount_ok(p_amount);
+    if cur_of(a) <> base_currency then
+      fail(54, 'Το ATM δίνει μόνο ' || base_currency || ': ο λογαριασμός της κάρτας είναι σε ' || cur_of(a));
+    end if;
     if m.cash < p_amount then
       fail(39, 'Το ATM δεν έχει αρκετά μετρητά: ως ' || money_text(m.cash));
     end if;
@@ -1469,6 +1675,9 @@ create or replace package body bk_core as
     e number;
   begin
     amount_ok(p_amount);
+    if cur_of(a) <> base_currency then
+      fail(54, 'Το ATM δέχεται μόνο ' || base_currency || ': ο λογαριασμός της κάρτας είναι σε ' || cur_of(a));
+    end if;
     if mod(p_amount, 5) <> 0 then
       fail(38, 'Το ATM δέχεται χαρτονομίσματα: ένα ποσό σε πεντάδες');
     end if;
@@ -1589,11 +1798,17 @@ create or replace package body bk_core as
     return k.credit_limit + account_row(p_account_id).balance - k.held;
   end;
 
-  function cc_authorize(p_card_id number, p_amount number, p_merchant varchar2 default null) return number is
+  function cc_authorize(p_card_id number, p_amount number, p_merchant varchar2 default null,
+                        p_currency varchar2 default null) return number is
     acc number;
     k bk_ccard%rowtype;
     a bk_account%rowtype;
     v number;
+    cur varchar2(3) := upper(p_currency);
+    amt number := p_amount;
+    conv number;
+    fxf number := 0;
+    pct number;
   begin
     amount_ok(p_amount);
     acc := card_account(p_card_id);
@@ -1602,13 +1817,27 @@ create or replace package body bk_core as
     if a.status = 'B' then
       fail(18, 'Ο λογαριασμός της κάρτας είναι δεσμευμένος');
     end if;
-    v := k.credit_limit + a.balance - k.held;
-    if p_amount > v then
-      fail(47, 'Δεν φτάνει το όριο της κάρτας: διαθέσιμα ' || money_text(greatest(v, 0)));
+    -- a purchase in another currency: in that of the card at the mid rate, and the fee of conversion
+    if cur is not null and cur <> a.currency then
+      currency_ok(cur);
+      conv := fx_convert(p_amount, cur, a.currency);
+      if conv <= 0 then
+        fail(17, 'Το ποσό: πάνω από 0 και σε ' || a.currency);
+      end if;
+      select fx_fee_pct into pct from bk_cc_product where product_id = a.product_id;
+      fxf := round(conv * pct / 100, 2);
+      amt := conv + fxf;
+    else
+      cur := null;
     end if;
-    insert into bk_cc_auth (account_id, card_id, amount, merchant, day)
-    values (acc, p_card_id, p_amount, substr(p_merchant, 1, 100), open_day) returning id into v;
-    update bk_ccard set held = held + p_amount where account_id = acc;
+    v := k.credit_limit + a.balance - k.held;
+    if amt > v then
+      fail(47, 'Δεν φτάνει το όριο της κάρτας: διαθέσιμα ' || money_text(greatest(v, 0), a.currency));
+    end if;
+    insert into bk_cc_auth (account_id, card_id, amount, merchant, day, orig_amount, orig_currency, fx_fee)
+    values (acc, p_card_id, amt, substr(p_merchant, 1, 100), open_day, case when cur is not null then p_amount end, cur, fxf)
+    returning id into v;
+    update bk_ccard set held = held + amt where account_id = acc;
     return v;
   end;
 
@@ -1634,15 +1863,29 @@ create or replace package body bk_core as
     h bk_cc_auth%rowtype := auth_row(p_auth_id);
     amt number := nvl(p_amount, h.amount);
     e number;
+    fee_ number;
+    orig_ number;
   begin
     amount_ok(amt);
     if amt > h.amount then
       fail(49, 'Η χρέωση είναι ως το ποσό της έγκρισης, ' || money_text(h.amount));
     end if;
+    -- (abroad: its part of the fee of conversion, a fee of its own; the amount and the currency it was in)
+    fee_ := case when h.orig_currency is not null then round(h.fx_fee * amt / h.amount, 2) else 0 end;
     e := new_entry('PUR', null, 'Αγορά' || case when h.merchant is not null then ': ' || h.merchant end, null, 'SYS');
-    line(e, h.account_id, null, amt, 0);
-    line(e, null, 'CC_MERCH', 0, amt);
-    update bk_cc_auth set status = 'P', amount = amt, entry_id = e where id = p_auth_id;
+    line(e, h.account_id, null, amt - fee_, 0);
+    line(e, null, 'CC_MERCH', 0, amt - fee_);
+    if fee_ > 0 then
+      line(e, h.account_id, null, fee_, 0, 'FEE');
+      line(e, null, 'FEE', 0, fee_);
+    end if;
+    if h.orig_currency is not null then
+      orig_ := round(h.orig_amount * amt / h.amount, 2);
+      update bk_entry set orig_amount = orig_, orig_currency = h.orig_currency, fx_rate = round((amt - fee_) / orig_, 8)
+      where id = e;
+    end if;
+    update bk_cc_auth set status = 'P', amount = amt, fx_fee = fee_, orig_amount = nvl2(h.orig_currency, orig_, null),
+                          entry_id = e where id = p_auth_id;
     update bk_ccard set held = held - h.amount where account_id = h.account_id;
     return e;
   end;
@@ -1654,10 +1897,11 @@ create or replace package body bk_core as
     update bk_ccard set held = held - h.amount where account_id = h.account_id;
   end;
 
-  function cc_purchase(p_card_id number, p_amount number, p_merchant varchar2 default null) return number is
+  function cc_purchase(p_card_id number, p_amount number, p_merchant varchar2 default null,
+                       p_currency varchar2 default null) return number is
     h number;
   begin
-    h := cc_authorize(p_card_id, p_amount, p_merchant);
+    h := cc_authorize(p_card_id, p_amount, p_merchant, p_currency);
     return cc_capture(h);
   end;
 

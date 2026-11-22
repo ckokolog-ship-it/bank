@@ -8,7 +8,9 @@
 -- transfers to another bank and up to 4 withdrawals a month, the savings plus with 100 € left in them always,
 -- a lower ATM limit for a few accounts; a movement out of its rules is not done. 12 credit cards (Classic, Gold):
 -- purchases, a hotel held and released now and then, a statement a month, paid from the current account of the
--- customer a couple of days before it is due (in full, the minimum, or a part), or not at all: the fee. Run by
+-- customer a couple of days before it is due (in full, the minimum, or a part), or not at all: the fee; now and
+-- then a purchase abroad (USD, GBP, CHF, JPY). The rates of the currencies every day (a random walk); 8 accounts in
+-- USD or GBP, money changed into them every month. Run by
 -- INSTALL.sql demo; once: a database with entries already is left as it is.
 set serveroutput on
 declare
@@ -37,6 +39,10 @@ declare
   cck t_num;          --   minimum, P a part, 0 F, 1 M, 2 P)
   ccpay t_num;
   ccx number;
+  fx t_txt := t_txt('USD', 'GBP', 'CHF', 'JPY', 'SEK', 'NOK', 'DKK', 'CAD', 'AUD');
+  fxa t_num;          -- the accounts in another currency, and the current account in EUR of their customer
+  fxf t_num;
+  mid number;
   n number;
   e number;
   d date;
@@ -143,6 +149,14 @@ begin
   for j in 1 .. 8 loop
     bk_core.add_holder(acc(j * 3), cust(41 - j));
   end loop;
+  -- 8 current accounts in another currency (USD, GBP)
+  for j in 1 .. 8 loop
+    k := k + 1;
+    acc(k) := bk_core.open_account('CUR', cust(j * 5 - 3), 0, null, case when mod(j, 2) = 0 then 'GBP' else 'USD' end);
+    salary(k) := 0; rent(k) := 0;
+    fxa(j) := acc(k);
+    fxf(j) := curacc(j * 5 - 3);
+  end loop;
 
   -- the debit cards: one for each current account, of its primary holder; their PIN given at the counter
   for x in (select a.id from bk_account a join bk_product p on p.id = a.product_id where p.kind = 'CUR' order by a.id) loop
@@ -185,6 +199,25 @@ begin
   -- a year, day by day
   d := first_day;
   while d <= last_day_ loop
+    -- the rates of the day: each a little up or down
+    for c in 1 .. fx.count loop
+      mid := bk_core.fx_rate(fx(c), d);
+      -- (the krone of Denmark tied to the euro: hardly)
+      bk_core.set_fx_rate(fx(c), d, round(mid * exp(dbms_random.normal * case when fx(c) = 'DKK' then 0.0003 else 0.003 end),
+                                          case when fx(c) = 'JPY' then 2 else 4 end));
+    end loop;
+    -- money changed into the accounts in another currency, on the 10th
+    if to_number(to_char(d, 'DD')) = 10 then
+      for j in 1 .. fxa.count loop
+        amt := money(100, 400);
+        if available(fxf(j)) >= amt then
+          begin
+            e := bk_core.transfer(fxf(j), fxa(j), amt, 'Αγορά συναλλάγματος', p_channel => 'WEB');
+          exception when others then refused;
+          end;
+        end if;
+      end loop;
+    end if;
     -- the rates of the savings up in the middle of the year
     if d = first_day + 180 then
       for p in (select id from bk_product where code = 'SAV') loop
@@ -254,9 +287,17 @@ begin
     for j in 1 .. cca.count loop
       if dbms_random.value < 0.08 then
         begin
-          e := bk_core.cc_purchase(cck(j), money(8, 250),
-                 case trunc(dbms_random.value(0, 6)) when 0 then 'σούπερ μάρκετ' when 1 then 'καύσιμα'
-                   when 2 then 'ηλεκτρονικό κατάστημα' when 3 then 'εστιατόριο' when 4 then 'ρούχα' else 'αεροπορικά' end);
+          if dbms_random.value < 0.1 then
+            -- abroad
+            n := trunc(dbms_random.value(1, 5));
+            e := bk_core.cc_purchase(cck(j), case n when 4 then round(dbms_random.value(1000, 30000)) else money(10, 250) end,
+                   case n when 1 then 'Amazon US' when 2 then 'London hotel' when 3 then 'Zürich restaurant' else 'Tokyo shop' end,
+                   case n when 1 then 'USD' when 2 then 'GBP' when 3 then 'CHF' else 'JPY' end);
+          else
+            e := bk_core.cc_purchase(cck(j), money(8, 250),
+                   case trunc(dbms_random.value(0, 6)) when 0 then 'σούπερ μάρκετ' when 1 then 'καύσιμα'
+                     when 2 then 'ηλεκτρονικό κατάστημα' when 3 then 'εστιατόριο' when 4 then 'ρούχα' else 'αεροπορικά' end);
+          end if;
         exception when others then refused;
         end;
       end if;

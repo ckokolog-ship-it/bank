@@ -94,13 +94,17 @@ create or replace package body bk_report as
       from bk_line l join bk_entry e on e.id = l.entry_id
       where l.account_id = p_account_id and e.book_date < trunc(p_from);
       for x in (select e.book_date, e.value_date, e.kind, l.op, e.descr, e.id, l.debit, l.credit,
+                       e.orig_amount, e.orig_currency, e.fx_rate,
                        (select 'Y' from bk_entry v where v.reversal_of = e.id) reversed
                 from bk_line l join bk_entry e on e.id = l.entry_id
                 where l.account_id = p_account_id and e.book_date between trunc(p_from) and trunc(p_to)
                 order by e.book_date, e.id, l.id) loop
         out_(x.book_date, to_char(x.value_date, 'DD/MM/YYYY'),
-             '#' || x.id || ' ' || case when x.kind = 'PUR' and x.descr is not null then x.descr     -- (Αγορά: ...)
+             '#' || x.id || ' ' || case when x.kind = 'PUR' and x.descr is not null and nvl(x.op, '-') <> 'FEE' then x.descr     -- (Αγορά: ...)
                                         else kind_text(x.kind, x.op) || case when x.descr is not null then ': ' || x.descr end end
+             -- (in another currency: the amount it was in, at its rate)
+             || case when x.orig_currency is not null and nvl(x.op, '-') <> 'FEE' then ' (' || money(x.orig_amount) || ' '
+                       || x.orig_currency || ' × ' || rtrim(rtrim(money(x.fx_rate, 6), '0'), ',') || ')' end
              || case when x.reversed = 'Y' then ' (αντιλογίστηκε)' end,
              nullif(x.debit, 0), nullif(x.credit, 0));
         pipe row (r);
@@ -140,7 +144,8 @@ create or replace package body bk_report as
   function title(p_kind varchar2, p_account_id number) return varchar2 is
     t varchar2(300);
   begin
-    select a.iban || '  ·  ' || a.holder || '  ·  ' || a.product_name into t from bk_account_v a where a.id = p_account_id;
+    select a.iban || '  ·  ' || a.holder || '  ·  ' || a.product_name || '  ·  ' || a.currency into t
+    from bk_account_v a where a.id = p_account_id;
     return case upper(p_kind) when 'I' then 'Τόκοι λογαριασμού ' when 'C' then 'Κίνηση πιστωτικής κάρτας '
                               else 'Καρτέλα λογαριασμού ' end || t;
   exception
