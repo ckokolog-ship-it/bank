@@ -488,12 +488,13 @@ def test_the_products_and_their_rates(cur):
     assert prop(cur, 'BLOCK PROD#13') is None
     day = cur.execute("select bk_core.open_day from dual").fetchone()[0]
     assert item(cur, 'CTL.N_FROM') == day.strftime('%d/%m/%Y')
-    pid = cur.execute("select id from bk_product where code = 'TA1'").fetchone()
+    # a product of its own (TF1: not that of test_api, whose rates it sets itself)
+    pid = cur.execute("select id from bk_product where code = 'TF1'").fetchone()
     if not pid:
         cur.execute("insert into bk_product (code, name, kind, day_basis, cap_every, tax_rate, od_rate) "
-                    "values ('TA1', 'Test api', 'CUR', 'ACT365', 'Q', 15, 10)")
+                    "values ('TF1', 'Test forms', 'CUR', 'ACT365', 'Q', 15, 10)")
         cur.connection.commit()
-        pid = cur.execute("select id from bk_product where code = 'TA1'").fetchone()
+        pid = cur.execute("select id from bk_product where code = 'TF1'").fetchone()
     run(cur, "ui.press('CTL.SETRATE');", PROD__ID=str(pid[0]), CTL__N_FROM=day.strftime('%d/%m/%Y'), CTL__N_MIN='70000',
         CTL__N_RATE='2,5'.replace(',', '.'))
     assert cur.execute('select rate from bk_rate where product_id = :p and valid_from = :d and min_balance = 70000',
