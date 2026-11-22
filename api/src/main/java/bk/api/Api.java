@@ -49,6 +49,8 @@ import java.util.Map;
  *   GET  /api/accounts/{id}/cards   POST /api/accounts/{id}/cards {customer_id}   its cards; a new one (its PIN
  *                                                back, once: for the customer)
  *   POST /api/cards/{id}/pin                     a new PIN (back, once), unlocked
+ *   POST /api/cards/pins {pin, all}              a PIN to every card without one (all: to every card): the same
+ *                                                (pin) or a new one each; the cards and their PIN back, once (M)
  *   POST /api/cards/{id}/status {status A|B|C}   B blocked (anyone); A again, C cancelled (M)
  *   GET  /api/atms   POST /api/atms/{code}/cash {amount}   the ATMs and their cash; cash in (+) or out (-) (M)
  *   GET  /api/users   POST /api/users {username, full_name, role, password}
@@ -599,6 +601,10 @@ final class Api {
     }
 
     private Object cards(Connection c, Auth.User u, boolean get, String[] p, Map<String, Object> in) throws SQLException {
+        if (!get && is(p, "cards", "pins")) {
+            need(u, "MANAGER");
+            return Atm.pinsForAll(c, Http.text(in, "pin", false), Boolean.TRUE.equals(in.get("all")));
+        }
         if (!get && is(p, "cards", "*", "pin")) {
             long id = Http.id(p[1]);
             Map<String, Object> k = card(c, id);
