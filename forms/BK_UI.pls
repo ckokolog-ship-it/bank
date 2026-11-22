@@ -657,7 +657,7 @@ PACKAGE BODY ui IS
       SELECT nvl(max(active), 'Y') INTO st FROM bk_currency WHERE code = k;
       bk_core.set_currency(k, name_in('CTL.S_NAME'), num('CTL.S_DEC'), num('CTL.S_SPREAD'), st);
       forms_ddl('COMMIT');
-      SELECT ora_hash(k) INTO id_ FROM dual;
+      SELECT id INTO id_ FROM bk_currency_v WHERE code = k;       -- (its ID: the view counts it; not ORA_HASH here)
       show_only(id_);
       message('Το νόμισμα ' || k || ' αποθηκεύτηκε');
     ELSIF p_item = 'CTL.CONVERT' THEN

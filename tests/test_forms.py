@@ -198,6 +198,9 @@ def test_plsql_of_the_forms(name):
     assert not re.search(r'\(\s*SELECT\b', body), 'a SELECT inside an expression'
     assert not re.search(r'\b(LEFT|RIGHT|FULL|INNER|CROSS)\s+(OUTER\s+)?JOIN\b|\bJOIN\b', body), 'an ANSI join'
     assert not re.search(r'\b(FUNCTION|PROCEDURE)\s+(DAY|MONTH|YEAR|DATE|LEVEL|SIZE|MODE)\b', body)
+    # functions of SQL the PL/SQL of the Forms 14 does not know, even inside a SELECT (PL/SQL ERROR 201 on forms1)
+    m = re.search(r'\b(ORA_HASH|STANDARD_HASH|LISTAGG|NVL2|REGEXP_\w+)\s*\(', body)
+    assert not m, 'not known to the Forms: ' + (m.group(1) if m else '')
 
 
 def test_the_words_of_the_forms():
