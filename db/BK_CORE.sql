@@ -129,6 +129,33 @@ create or replace package bk_core as
   function atm_deposit(p_atm_code varchar2, p_card_id number, p_amount number) return number;
   function atm_transfer(p_atm_code varchar2, p_card_id number, p_to_iban varchar2, p_amount number) return number;
 
+  -- the credit cards (BK_CCARD): an account of a product of kind CC, its BALANCE below 0 what is owed, a card of
+  -- it (new_card: its PAN, its PIN, the ATM). What may be spent: its CREDIT_LIMIT + BALANCE - HELD (the
+  -- authorizations not posted yet), read and changed with the row of the account locked (lock_account: every
+  -- authorization, purchase, payment and change of the limit waits for the one before it), so two purchases at
+  -- once never pass the limit together.
+  -- A product of credit cards and its terms (again: changed): its id back
+  function set_cc_product(p_code varchar2, p_name varchar2, p_rate number, p_min_pct number default 3,
+                          p_min_amount number default 20, p_due_days number default 25, p_late_fee number default 0) return number;
+  -- a credit card account for a customer, its limit, the day of its month of its statement (1 .. 28; null: the
+  -- business day, up to 28): its account back (its card: new_card)
+  function cc_open(p_product_code varchar2, p_customer_id number, p_limit number, p_stmt_day number default null) return number;
+  procedure cc_set_limit(p_account_id number, p_limit number);
+  function cc_available(p_account_id number) return number;
+  -- a purchase: its authorization (the amount held, within what may be spent: its id back), then posted (the
+  -- amount, up to that held; null: all of it: its entry PUR back) or released. cc_purchase: both at once
+  function cc_authorize(p_card_id number, p_amount number, p_merchant varchar2 default null) return number;
+  function cc_capture(p_auth_id number, p_amount number default null) return number;
+  procedure cc_release(p_auth_id number);
+  function cc_purchase(p_card_id number, p_amount number, p_merchant varchar2 default null) return number;
+  -- a payment of a card from an account of the bank (a transfer: its rules); in cash: deposit to its account
+  function cc_pay(p_account_id number, p_from_account_id number, p_amount number, p_channel varchar2 default 'BR') return number;
+  -- the end of a day for the credit cards (close_day calls it): the authorizations older than CC_HOLD_DAYS
+  -- released; the statements due that day: the late fee when less than their minimum was paid; the cards of the
+  -- statement day: their interest (none in the grace: the statement before paid in full by its due date; else on
+  -- what was owed each day of the period, the purchases from their day), then their statement
+  procedure cc_close_day(p_day date);
+
 end bk_core;
 /
 
@@ -793,6 +820,8 @@ create or replace package body bk_core as
     end if;
   end;
 
+  function is_cc(p_account_id number) return boolean;
+
   function reverse(p_entry_id number, p_descr varchar2 default null) return number is
     o bk_entry%rowtype;
     e number;
@@ -813,7 +842,9 @@ create or replace package body bk_core as
     -- money back out of an account that took it: within its balance (as any withdrawal)
     for l in (select account_id, sum(credit) - sum(debit) took from bk_line
               where entry_id = p_entry_id and account_id is not null group by account_id order by account_id) loop
-      if l.took > 0 then
+      if l.took > 0 and is_cc(l.account_id) then
+        lock_account(l.account_id);                -- (a payment of a card back: owed again)
+      elsif l.took > 0 then
         out_ok(l.account_id, l.took);
       else
         into_ok(account_row(l.account_id));
@@ -872,7 +903,7 @@ create or replace package body bk_core as
     with acc as (
       select a.id, a.product_id, a.balance, p.day_basis, p.od_rate, nvl(a.accrued_to, a.opened_on - 1) at0
       from bk_account a join bk_product p on p.id = a.product_id
-      where a.id between p_lo and p_hi and a.status <> 'C' and a.opened_on <= p_day
+      where a.id between p_lo and p_hi and a.status <> 'C' and a.opened_on <= p_day and p.kind <> 'CC'
         and nvl(a.accrued_to, a.opened_on - 1) < p_day and instr(p_caps, p.cap_every) > 0),
     -- the changes of its balance by value date after ACCRUED_TO (the later ones too: its balance is now)
     ev as (
@@ -952,7 +983,7 @@ create or replace package body bk_core as
        select id, gross, case when gross > 0 then round(gross * tax_rate / 100, 2) else 0 end, tax_rate, ' || seq || '.nextval
        from (select a.id, round(a.accrued, 2) gross, p.tax_rate
              from bk_account a join bk_product p on p.id = a.product_id
-             where a.id between :lo and :hi and a.status <> ''C'' and instr(:caps, p.cap_every) > 0
+             where a.id between :lo and :hi and a.status <> ''C'' and p.kind <> ''CC'' and instr(:caps, p.cap_every) > 0
                and round(a.accrued, 2) <> 0)'
       using p_lo, p_hi, p_caps;
     -- (the words as int_descr: a function of the package is not called in SQL)
@@ -1050,7 +1081,8 @@ create or replace package body bk_core as
     return s;
   end;
 
-  -- the end of the business day: at the end of a period, its accounts accrued and capitalized (by 200.000)
+  -- the end of the business day: at the end of a period, its accounts accrued and capitalized (by 200.000); the
+  -- credit cards (cc_close_day)
   procedure close_day(p_day date default null) is
     d date := open_day;
     caps varchar2(3);
@@ -1070,6 +1102,7 @@ create or replace package body bk_core as
         lo := lo + 200000;
       end loop;
     end if;
+    cc_close_day(d);
     insert into bk_day (day) values (d);
   end;
 
@@ -1092,6 +1125,10 @@ create or replace package body bk_core as
     where l.account_id = p_account_id and x.value_date > d;
     if e > 0 then
       fail(25, 'Ο λογαριασμός ' || a.iban || ' έχει κινήσεις με μελλοντική ημερομηνία αξίας');
+    end if;
+    select nvl(max(held), 0) into e from bk_ccard where account_id = p_account_id;
+    if e > 0 then
+      fail(25, 'Η κάρτα του ' || a.iban || ' έχει εγκρίσεις σε εκκρεμότητα: ' || money_text(e));
     end if;
     update bk_account set status = 'C', closed_on = d where id = p_account_id;
   end;
@@ -1453,6 +1490,275 @@ create or replace package body bk_core as
         fail(21, 'Δεν υπάρχει λογαριασμός ' || p_to_iban || ' στην τράπεζα');
     end;
     return transfer(a, t, p_amount, 'Μεταφορά από ATM ' || m.code, null, 'ATM');
+  end;
+
+  -- ---------------------------------------------------------------------------------------------
+  -- the credit cards
+  function is_cc(p_account_id number) return boolean is
+    n number;
+  begin
+    select count(*) into n from bk_ccard where account_id = p_account_id;
+    return n > 0;
+  end;
+
+  -- the card account (locked first, when p_lock: what may be spent read after the one before it)
+  function cc_row(p_account_id number, p_lock boolean default false) return bk_ccard%rowtype is
+    k bk_ccard%rowtype;
+  begin
+    if p_lock then
+      lock_account(p_account_id);
+    end if;
+    select * into k from bk_ccard where account_id = p_account_id;
+    return k;
+  exception
+    when no_data_found then
+      fail(46, 'Ο λογαριασμός ' || p_account_id || ' δεν είναι πιστωτικής κάρτας');
+  end;
+
+  procedure limit_ok(p_limit number) is
+  begin
+    if p_limit is null or p_limit < 0 or p_limit <> round(p_limit, 2) then
+      fail(51, 'Το όριο της κάρτας: από 0 και πάνω, με ως δύο δεκαδικά');
+    end if;
+  end;
+
+  function set_cc_product(p_code varchar2, p_name varchar2, p_rate number, p_min_pct number default 3,
+                          p_min_amount number default 20, p_due_days number default 25, p_late_fee number default 0) return number is
+    id_ number;
+    k varchar2(3);
+  begin
+    if p_code is null or p_name is null or nvl(p_rate, -1) < 0 or nvl(p_min_pct, -1) not between 0 and 100
+       or nvl(p_min_amount, -1) < 0 or nvl(p_due_days, 0) not between 1 and 27 or nvl(p_late_fee, -1) < 0 then
+      fail(50, 'Όροι κάρτας: κωδικός, όνομα, επιτόκιο από 0, ελάχιστη καταβολή 0 - 100 % και ποσό από 0, '
+               || 'προθεσμία 1 - 27 ημέρες, τέλος καθυστέρησης από 0');
+    end if;
+    begin
+      select id, kind into id_, k from bk_product where code = upper(p_code);
+      if k <> 'CC' then
+        fail(46, 'Το προϊόν ' || upper(p_code) || ' δεν είναι πιστωτικής κάρτας');
+      end if;
+      update bk_product set name = p_name where id = id_;
+    exception
+      when no_data_found then
+        insert into bk_product (code, name, kind, tax_rate, od_rate) values (upper(p_code), p_name, 'CC', 0, 0)
+        returning id into id_;
+    end;
+    merge into bk_cc_product c
+    using (select id_ product_id from dual) v on (c.product_id = v.product_id)
+    when matched then update set rate = p_rate, min_pct = p_min_pct, min_amount = p_min_amount, due_days = p_due_days,
+                                 late_fee = p_late_fee
+    when not matched then insert (product_id, rate, min_pct, min_amount, due_days, late_fee)
+                          values (id_, p_rate, p_min_pct, p_min_amount, p_due_days, p_late_fee);
+    return id_;
+  end;
+
+  function cc_open(p_product_code varchar2, p_customer_id number, p_limit number, p_stmt_day number default null) return number is
+    n number;
+    sd number := nvl(p_stmt_day, least(to_number(to_char(open_day, 'DD')), 28));
+    a number;
+  begin
+    select count(*) into n from bk_product p join bk_cc_product c on c.product_id = p.id
+    where p.code = upper(p_product_code) and p.kind = 'CC';
+    if n = 0 then
+      fail(46, 'Το προϊόν ' || p_product_code || ' δεν είναι πιστωτικής κάρτας');
+    end if;
+    limit_ok(p_limit);
+    if sd is null or sd not between 1 and 28 or sd <> trunc(sd) then
+      fail(50, 'Η ημέρα της κίνησης (statement) της κάρτας: 1 - 28 του μήνα');
+    end if;
+    a := open_account(p_product_code, p_customer_id, 0);
+    insert into bk_ccard (account_id, credit_limit, stmt_day) values (a, p_limit, sd);
+    return a;
+  end;
+
+  procedure cc_set_limit(p_account_id number, p_limit number) is
+    k bk_ccard%rowtype;
+  begin
+    limit_ok(p_limit);
+    k := cc_row(p_account_id, true);
+    if account_row(p_account_id).status = 'C' then
+      fail(12, 'Ο λογαριασμός της κάρτας είναι κλειστός');
+    end if;
+    -- (lower than what is owed: allowed; nothing more may be spent till it is paid)
+    update bk_ccard set credit_limit = p_limit where account_id = p_account_id;
+  end;
+
+  function cc_available(p_account_id number) return number is
+    k bk_ccard%rowtype := cc_row(p_account_id);
+  begin
+    return k.credit_limit + account_row(p_account_id).balance - k.held;
+  end;
+
+  function cc_authorize(p_card_id number, p_amount number, p_merchant varchar2 default null) return number is
+    acc number;
+    k bk_ccard%rowtype;
+    a bk_account%rowtype;
+    v number;
+  begin
+    amount_ok(p_amount);
+    acc := card_account(p_card_id);
+    k := cc_row(acc, true);                    -- (another authorization of the card waits here)
+    a := account_row(acc);
+    if a.status = 'B' then
+      fail(18, 'Ο λογαριασμός της κάρτας είναι δεσμευμένος');
+    end if;
+    v := k.credit_limit + a.balance - k.held;
+    if p_amount > v then
+      fail(47, 'Δεν φτάνει το όριο της κάρτας: διαθέσιμα ' || money_text(greatest(v, 0)));
+    end if;
+    insert into bk_cc_auth (account_id, card_id, amount, merchant, day)
+    values (acc, p_card_id, p_amount, substr(p_merchant, 1, 100), open_day) returning id into v;
+    update bk_ccard set held = held + p_amount where account_id = acc;
+    return v;
+  end;
+
+  -- an authorization held (its account locked first)
+  function auth_row(p_auth_id number) return bk_cc_auth%rowtype is
+    h bk_cc_auth%rowtype;
+    acc number;
+  begin
+    begin
+      select account_id into acc from bk_cc_auth where id = p_auth_id;
+    exception
+      when no_data_found then fail(48, 'Δεν υπάρχει έγκριση ' || p_auth_id);
+    end;
+    lock_account(acc);
+    select * into h from bk_cc_auth where id = p_auth_id;
+    if h.status <> 'H' then
+      fail(48, 'Η έγκριση ' || p_auth_id || ' δεν εκκρεμεί: ' || case h.status when 'P' then 'χρεώθηκε' else 'αποδεσμεύτηκε' end);
+    end if;
+    return h;
+  end;
+
+  function cc_capture(p_auth_id number, p_amount number default null) return number is
+    h bk_cc_auth%rowtype := auth_row(p_auth_id);
+    amt number := nvl(p_amount, h.amount);
+    e number;
+  begin
+    amount_ok(amt);
+    if amt > h.amount then
+      fail(49, 'Η χρέωση είναι ως το ποσό της έγκρισης, ' || money_text(h.amount));
+    end if;
+    e := new_entry('PUR', null, 'Αγορά' || case when h.merchant is not null then ': ' || h.merchant end, null, 'SYS');
+    line(e, h.account_id, null, amt, 0);
+    line(e, null, 'CC_MERCH', 0, amt);
+    update bk_cc_auth set status = 'P', amount = amt, entry_id = e where id = p_auth_id;
+    update bk_ccard set held = held - h.amount where account_id = h.account_id;
+    return e;
+  end;
+
+  procedure cc_release(p_auth_id number) is
+    h bk_cc_auth%rowtype := auth_row(p_auth_id);
+  begin
+    update bk_cc_auth set status = 'R' where id = p_auth_id;
+    update bk_ccard set held = held - h.amount where account_id = h.account_id;
+  end;
+
+  function cc_purchase(p_card_id number, p_amount number, p_merchant varchar2 default null) return number is
+    h number;
+  begin
+    h := cc_authorize(p_card_id, p_amount, p_merchant);
+    return cc_capture(h);
+  end;
+
+  function cc_pay(p_account_id number, p_from_account_id number, p_amount number, p_channel varchar2 default 'BR') return number is
+    k bk_ccard%rowtype := cc_row(p_account_id);
+  begin
+    return transfer(p_from_account_id, p_account_id, p_amount, 'Πληρωμή κάρτας', null, p_channel);
+  end;
+
+  -- the credits of a card account booked in p_from .. p_to (payments, refunds)
+  function cc_paid(p_account_id number, p_from date, p_to date) return number is
+    v number;
+  begin
+    select nvl(sum(l.credit), 0) into v
+    from bk_line l join bk_entry e on e.id = l.entry_id
+    where l.account_id = p_account_id and e.book_date between p_from and p_to;
+    return v;
+  end;
+
+  -- the statement of a card on p_day: its interest first (out of the grace), then its sums
+  procedure cc_cycle(p_account_id number, p_day date) is
+    k bk_ccard%rowtype := cc_row(p_account_id, true);
+    a bk_account%rowtype := account_row(p_account_id);
+    t bk_cc_product%rowtype;
+    s bk_cc_statement%rowtype;
+    f date := nvl(k.last_stmt, a.opened_on - 1) + 1;
+    grace boolean := true;
+    i number := 0;
+    e number;
+    v number;
+  begin
+    select * into t from bk_cc_product where product_id = a.product_id;
+    if k.last_stmt is not null then
+      select * into s from bk_cc_statement where account_id = p_account_id and stmt_date = k.last_stmt;
+      v := cc_paid(p_account_id, s.stmt_date + 1, s.due_date);
+      grace := s.closing <= 0 or v >= s.closing;
+    end if;
+    if not grace then
+      -- what was owed at the end of each day of the period (by value date), at the rate of the card
+      select nvl(round(sum(greatest(-(select nvl(sum(l.credit - l.debit), 0) from bk_line l
+                                      where l.account_id = p_account_id and l.value_date <= c.day), 0)) * t.rate / 100 / 365, 2), 0)
+      into i from bk_calendar c where c.day between f and p_day;
+      if i > 0 then
+        e := new_entry('INT', null, 'Τόκοι κάρτας ' || to_char(p_day, 'MM/YYYY'), null, 'SYS');
+        line(e, p_account_id, null, i, 0);
+        line(e, null, 'CC_INT', 0, i);
+      end if;
+    end if;
+    s.opening := nvl(s.closing, 0);
+    s.account_id := p_account_id;
+    s.stmt_date := p_day;
+    s.period_from := f;
+    select nvl(sum(case when e.kind = 'INT' then l.debit end), 0),
+           nvl(sum(case when e.kind = 'FEE' or l.op = 'FEE' then l.debit end), 0),
+           nvl(sum(case when e.kind <> 'INT' and e.kind <> 'FEE' and nvl(l.op, '-') <> 'FEE' then l.debit end), 0),
+           nvl(sum(l.credit), 0)
+    into s.interest, s.fees, s.purchases, s.payments
+    from bk_line l join bk_entry e on e.id = l.entry_id
+    where l.account_id = p_account_id and e.book_date between f and p_day;
+    s.closing := -account_row(p_account_id).balance;
+    s.min_due := case when s.closing <= 0 then 0
+                      else least(s.closing, greatest(t.min_amount, round(s.closing * t.min_pct / 100, 2))) end;
+    s.due_date := p_day + t.due_days;
+    s.late_fee := null;
+    insert into bk_cc_statement values s;
+    update bk_ccard set last_stmt = p_day where account_id = p_account_id;
+  end;
+
+  procedure cc_close_day(p_day date) is
+    hold_days number := nvl(to_number(setting('CC_HOLD_DAYS')), 7);
+    v number;
+    fee number;
+    e number;
+    dd number := to_number(to_char(p_day, 'DD'));
+  begin
+    -- (held its day and the CC_HOLD_DAYS - 1 after it: released at the close of the last of them)
+    for h in (select id from bk_cc_auth where status = 'H' and day <= p_day - hold_days + 1 order by account_id, id) loop
+      cc_release(h.id);
+    end loop;
+    -- the statements due today: their minimum paid?
+    for s in (select s.account_id, s.stmt_date, s.min_due, c.late_fee
+              from bk_cc_statement s, bk_account a, bk_cc_product c
+              where s.due_date = p_day and s.late_fee is null and a.id = s.account_id and c.product_id = a.product_id
+              order by s.account_id) loop
+      lock_account(s.account_id);
+      v := cc_paid(s.account_id, s.stmt_date + 1, p_day);
+      fee := case when s.min_due > 0 and v < s.min_due then s.late_fee else 0 end;
+      if fee > 0 then
+        e := new_entry('FEE', null, 'Καθυστέρηση πληρωμής κάρτας: ελάχιστη καταβολή ' || money_text(s.min_due)
+                                    || ' ως ' || to_char(p_day, 'DD/MM/YYYY'), null, 'SYS');
+        line(e, s.account_id, null, fee, 0, 'FEE');
+        line(e, null, 'FEE', 0, fee);
+      end if;
+      update bk_cc_statement set late_fee = fee where account_id = s.account_id and stmt_date = s.stmt_date;
+    end loop;
+    for k in (select c.account_id from bk_ccard c, bk_account a
+              where c.stmt_day = dd and a.id = c.account_id and a.status <> 'C' and a.opened_on <= p_day
+                and (c.last_stmt is null or c.last_stmt < p_day)
+              order by c.account_id) loop
+      cc_cycle(k.account_id, p_day);
+    end loop;
   end;
 
 end bk_core;
