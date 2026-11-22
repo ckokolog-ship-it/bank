@@ -15,11 +15,24 @@ create or replace package bk_auth as
   procedure logout(p_token varchar2);
   -- a role at least p_need (TELLER < MANAGER < ADMIN): 'Y' or 'N'
   function at_least(p_role varchar2, p_need varchar2) return varchar2;
+
+  -- the users (the form BK_USERS; the pages do the same in bk-api): a new one; a new password (unlocked, its
+  -- sessions ended); its role; active or not (not: its sessions ended); unlocked. Always an active ADMIN left
+  function create_user(p_username varchar2, p_full_name varchar2, p_role varchar2, p_password varchar2) return number;
+  procedure set_password(p_user_id number, p_password varchar2);
+  procedure set_role(p_user_id number, p_role varchar2);
+  procedure set_active(p_user_id number, p_active varchar2);
+  procedure unlock(p_user_id number);
+
+  -- a new PIN of a card (4 digits, not all the same, not 1234): its hash kept (as bk-api: PBKDF2-SHA256), the
+  -- card unlocked; the PIN back, once: for its holder
+  function new_pin(p_card_id number) return varchar2;
 end bk_auth;
 /
 
 create or replace package body bk_auth as
   c_max_failed constant pls_integer := 5;
+  c_iter constant pls_integer := 120000;         -- (the passwords and the PINs: as bk-api, Auth.ITERATIONS)
 
   procedure fail(p_no pls_integer, p_text varchar2) is
   begin
@@ -96,6 +109,128 @@ create or replace package body bk_auth as
   begin
     update bk_session set revoked = 'Y' where token_hash = h;
     commit;
+  end;
+
+  procedure password_ok(p varchar2) is
+  begin
+    if p is null or length(p) < 8 then
+      fail(44, 'Ο κωδικός: τουλάχιστον 8 χαρακτήρες');
+    end if;
+  end;
+
+  procedure role_ok(p varchar2) is
+  begin
+    if p is null or p not in ('TELLER', 'MANAGER', 'ADMIN') then
+      fail(44, 'Ρόλος: TELLER, MANAGER ή ADMIN');
+    end if;
+  end;
+
+  function user_row(p_user_id number) return bk_user%rowtype is
+    u bk_user%rowtype;
+  begin
+    select * into u from bk_user where id = p_user_id for update;
+    return u;
+  exception
+    when no_data_found then
+      fail(44, 'Δεν υπάρχει χρήστης ' || p_user_id);
+  end;
+
+  -- an active ADMIN stays, other than p_user_id
+  procedure keep_an_admin(p_user_id number) is
+    n number;
+  begin
+    select count(*) into n from bk_user where role = 'ADMIN' and active = 'Y' and id <> p_user_id;
+    if n = 0 then
+      fail(44, 'Μένει πάντα ένας ενεργός ADMIN');
+    end if;
+  end;
+
+  function create_user(p_username varchar2, p_full_name varchar2, p_role varchar2, p_password varchar2) return number is
+    u varchar2(30) := lower(trim(p_username));
+    s raw(16) := dbms_crypto.randombytes(16);
+    h raw(32);
+    v number;
+  begin
+    if u is null or not regexp_like(u, '^[a-z0-9._-]{2,30}$') then
+      fail(44, 'Όνομα χρήστη: 2 ως 30 πεζά γράμματα, ψηφία, . _ -');
+    end if;
+    if trim(p_full_name) is null then
+      fail(44, 'Το ονοματεπώνυμο του χρήστη');
+    end if;
+    role_ok(upper(p_role));
+    password_ok(p_password);
+    h := pbkdf2(p_password, s, c_iter);
+    insert into bk_user (username, full_name, role, pw_hash, pw_salt, pw_iter)
+    values (u, trim(p_full_name), upper(p_role), h, s, c_iter) returning id into v;
+    return v;
+  exception
+    when dup_val_on_index then
+      fail(44, 'Υπάρχει ήδη χρήστης ' || u);
+  end;
+
+  procedure set_password(p_user_id number, p_password varchar2) is
+    u bk_user%rowtype := user_row(p_user_id);
+    s raw(16) := dbms_crypto.randombytes(16);
+    h raw(32);
+  begin
+    password_ok(p_password);
+    h := pbkdf2(p_password, s, c_iter);
+    update bk_user set pw_hash = h, pw_salt = s, pw_iter = c_iter, failed = 0 where id = u.id;
+    update bk_session set revoked = 'Y' where user_id = u.id;
+  end;
+
+  procedure set_role(p_user_id number, p_role varchar2) is
+    u bk_user%rowtype := user_row(p_user_id);
+  begin
+    role_ok(upper(p_role));
+    if u.role = 'ADMIN' and u.active = 'Y' and upper(p_role) <> 'ADMIN' then
+      keep_an_admin(u.id);
+    end if;
+    update bk_user set role = upper(p_role) where id = u.id;
+  end;
+
+  procedure set_active(p_user_id number, p_active varchar2) is
+    u bk_user%rowtype := user_row(p_user_id);
+  begin
+    if p_active is null or p_active not in ('Y', 'N') then
+      fail(44, 'Ενεργός: Y ή N');
+    end if;
+    if p_active = 'N' and u.role = 'ADMIN' and u.active = 'Y' then
+      keep_an_admin(u.id);
+    end if;
+    update bk_user set active = p_active where id = u.id;
+    if p_active = 'N' then
+      update bk_session set revoked = 'Y' where user_id = u.id;
+    end if;
+  end;
+
+  procedure unlock(p_user_id number) is
+    u bk_user%rowtype := user_row(p_user_id);
+  begin
+    update bk_user set failed = 0 where id = u.id;
+  end;
+
+  function new_pin(p_card_id number) return varchar2 is
+    st varchar2(1);
+    p varchar2(4);
+    s raw(16) := dbms_crypto.randombytes(16);
+    h raw(32);
+  begin
+    begin
+      select status into st from bk_card where id = p_card_id for update;
+    exception
+      when no_data_found then fail(33, 'Δεν υπάρχει η κάρτα');
+    end;
+    if st = 'C' then
+      fail(34, 'Η κάρτα είναι ακυρωμένη');
+    end if;
+    loop
+      p := lpad(mod(abs(dbms_crypto.randominteger), 10000), 4, '0');
+      exit when p <> '1234' and p <> rpad(substr(p, 1, 1), 4, substr(p, 1, 1));
+    end loop;
+    h := pbkdf2(p, s, c_iter);
+    update bk_card set pin_hash = h, pin_salt = s, pin_iter = c_iter, pin_failed = 0 where id = p_card_id;
+    return p;
   end;
 
   function at_least(p_role varchar2, p_need varchar2) return varchar2 is

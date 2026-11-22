@@ -450,3 +450,137 @@ def test_the_close_of_a_day(cur):
     assert cur.execute('select bk_core.open_day from dual').fetchone()[0] > d0
     assert d0.strftime('%d/%m/%Y') in msgs(cur) and item(cur, 'CTL.D_LAST') == d0.strftime('%d/%m/%Y')
     assert item(cur, 'CTL.D_CHECK') == 'Όλα συμφωνούν'
+
+
+# -- part 2: the rules, the products, the cards, the ATMs, the users ---------------------------------------
+
+@needs_db
+def test_the_rules(cur):
+    compile_ui(cur, 'BK_RULES')
+    a = new_account(cur)
+    iban = cur.execute('select iban from bk_account where id = :a', a=a).fetchone()[0]
+    run(cur, "ui.press('CTL.SETRULE');", CTL__R_ACC_ID=str(a), CTL__R_ACC_TEXT=iban, CTL__R_OP='WDR',
+        CTL__R_CHANNEL='ATM', CTL__R_MAX='150', CTL__R_DAYAMT='300')
+    rid, mx, da = cur.execute("select id, max_amount, day_amount from bk_rule where account_id = :a and op = 'WDR' "
+                              "and channel = 'ATM'", a=a).fetchone()
+    assert (mx, da) == (150, 300) and '#%d' % rid in msgs(cur)
+    # the one selected to the fields, then changed: the same rule, its values replaced
+    run(cur, "ui.press('CTL.LOADRULE');", RULE__ID=str(rid), RULE__ACCOUNT_ID=str(a), RULE__IBAN=iban, RULE__OP='WDR',
+        RULE__CHANNEL='ATM', RULE__MAX_AMOUNT='150', RULE__DAY_AMOUNT='300')
+    assert (item(cur, 'CTL.R_ACC_ID'), item(cur, 'CTL.R_MAX'), item(cur, 'CTL.R_OP')) == (str(a), '150', 'WDR')
+    run(cur, "ui.press('CTL.SETRULE');", CTL__R_ACC_ID=str(a), CTL__R_ACC_TEXT=iban, CTL__R_OP='WDR',
+        CTL__R_CHANNEL='ATM', CTL__R_MAX='200')
+    assert cur.execute('select max_amount, day_amount from bk_rule where id = :r', r=rid).fetchone() == (200, None)
+    assert 'BK-132' in fails(cur, "ui.press('CTL.SETRULE');", CTL__R_OP='XXX', CTL__R_CHANNEL='*')
+    run(cur, "ui.press('CTL.REMOVERULE');", RULE__ID=str(rid))
+    assert cur.execute('select count(*) from bk_rule where id = :r', r=rid).fetchone()[0] == 0
+    # a teller: no save, no remove
+    run(cur, 'ui.init;', GLOBAL__BK_TOKEN=LOGIN['teller'])
+    assert prop(cur, 'CTL.SETRULE#11') == 'FALSE' and prop(cur, 'CTL.REMOVERULE#11') == 'FALSE'
+
+
+@needs_db
+def test_the_products_and_their_rates(cur):
+    compile_ui(cur, 'BK_PRODUCTS')
+    run(cur, 'ui.init;', GLOBAL__BK_TOKEN=LOGIN['teller'])
+    assert prop(cur, 'BLOCK PROD#13') == 'FALSE' and prop(cur, 'CTL.SETRATE#11') == 'FALSE'   # read only
+    run(cur, 'ui.init;')
+    assert prop(cur, 'BLOCK PROD#13') is None
+    day = cur.execute("select bk_core.open_day from dual").fetchone()[0]
+    assert item(cur, 'CTL.N_FROM') == day.strftime('%d/%m/%Y')
+    pid = cur.execute("select id from bk_product where code = 'TA1'").fetchone()
+    if not pid:
+        cur.execute("insert into bk_product (code, name, kind, day_basis, cap_every, tax_rate, od_rate) "
+                    "values ('TA1', 'Test api', 'CUR', 'ACT365', 'Q', 15, 10)")
+        cur.connection.commit()
+        pid = cur.execute("select id from bk_product where code = 'TA1'").fetchone()
+    run(cur, "ui.press('CTL.SETRATE');", PROD__ID=str(pid[0]), CTL__N_FROM=day.strftime('%d/%m/%Y'), CTL__N_MIN='70000',
+        CTL__N_RATE='2,5'.replace(',', '.'))
+    assert cur.execute('select rate from bk_rate where product_id = :p and valid_from = :d and min_balance = 70000',
+                       p=pid[0], d=day).fetchone()[0] == 2.5
+    assert 'εργάσιμη' in fails(cur, "ui.press('CTL.SETRATE');", PROD__ID=str(pid[0]), CTL__N_FROM='01/01/2020', CTL__N_RATE='1')
+
+
+@needs_db
+def test_the_cards_and_their_pin(cur):
+    compile_ui(cur, 'BK_CARDS')
+    a = new_account(cur, 100)
+    iban = cur.execute('select iban from bk_account where id = :a', a=a).fetchone()[0]
+    run(cur, "ui.press('CTL.NEWCARD');", CTL__C_ACC_ID=str(a), CTL__C_ACC_TEXT=iban)
+    k, pan, h, s, n = cur.execute('select id, pan, pin_hash, pin_salt, pin_iter from bk_card where account_id = :a', a=a).fetchone()
+    pin = item(cur, 'CTL.C_PIN')[:4]
+    assert pin.isdigit() and pan in item(cur, 'CTL.C_PIN') and pan in msgs(cur)
+    # the hash of the PIN as bk-api (Java: PBKDF2WithHmacSHA256) and the ATM read it
+    assert n == 120000 and hashlib.pbkdf2_hmac('sha256', pin.encode(), s, n) == h
+    run(cur, "ui.press('CTL.BLOCKCARD');", CARD__ID=str(k), CARD__PAN=pan)
+    assert cur.execute('select status from bk_card where id = :k', k=k).fetchone()[0] == 'B' and item(cur, 'CTL.C_PIN') is None
+    run(cur, "ui.press('CTL.ACTIVATE');", CARD__ID=str(k), CARD__PAN=pan)
+    run(cur, "ui.press('CTL.NEWPIN');", CARD__ID=str(k), CARD__PAN=pan)
+    pin2 = item(cur, 'CTL.C_PIN')[:4]
+    h2, s2 = cur.execute('select pin_hash, pin_salt from bk_card where id = :k', k=k).fetchone()
+    assert hashlib.pbkdf2_hmac('sha256', pin2.encode(), s2, 120000) == h2 and pin2 not in ('1234', '0000')
+    run(cur, "ui.press('CTL.CANCELCARD');", CARD__ID=str(k), CARD__PAN=pan)
+    assert 'BK-134' in fails(cur, "ui.press('CTL.NEWPIN');", CARD__ID=str(k), CARD__PAN=pan)
+    run(cur, 'ui.init;', GLOBAL__BK_TOKEN=LOGIN['teller'])
+    assert prop(cur, 'CTL.CANCELCARD#11') == 'FALSE' and prop(cur, 'CTL.NEWPIN#11') is None
+
+
+@needs_db
+def test_the_atms(cur):
+    compile_ui(cur, 'BK_ATMS')
+    run(cur, 'ui.init;')
+    assert item(cur, 'CTL.S_NOTES') == '20,50' and item(cur, 'CTL.S_MAX') == '40'
+    aid = cur.execute("select id from bk_atm where code = 'ATM03'").fetchone()[0]
+    before = cur.execute('select pieces from bk_atm_note where atm_id = :a and note = 20', a=aid).fetchone()[0]
+    run(cur, "ui.press('CTL.FILL');", ATMS__ID=str(aid), ATMS__CODE='ATM03', CTL__F_NOTE='20', CTL__F_PIECES='10')
+    assert cur.execute('select pieces from bk_atm_note where atm_id = :a and note = 20', a=aid).fetchone()[0] == before + 10
+    run(cur, "ui.press('CTL.FILL');", ATMS__ID=str(aid), ATMS__CODE='ATM03', CTL__F_NOTE='20', CTL__F_PIECES='-10')
+    assert 'BK-140' in fails(cur, "ui.press('CTL.SETNOTES');", CTL__S_NOTES='20,30', CTL__S_MAX='40')
+    run(cur, "ui.press('CTL.SETNOTES');", CTL__S_NOTES='20,50', CTL__S_MAX='40')
+    assert cur.execute('select count(*) from bk_check').fetchone()[0] == 0
+
+
+@needs_db
+def test_the_users(cur):
+    compile_ui(cur, 'BK_USERS')
+    run(cur, 'ui.init;')                                   # a manager: not an ADMIN
+    assert prop(cur, 'NEW_FORM') == 'BK_MAIN'
+    admin = 'tst-fa-' + uuid.uuid4().hex[:6]
+    salt = os.urandom(16)
+    cur.execute("insert into bk_user (username, full_name, role, pw_hash, pw_salt, pw_iter) values (:u, 'Test', 'ADMIN', :h, :s, 1000)",
+                u=admin, h=hashlib.pbkdf2_hmac('sha256', PW.encode(), salt, 1000), s=salt)
+    cur.connection.commit()
+    t = token_of(cur, admin)
+    run(cur, 'ui.init;', GLOBAL__BK_TOKEN=t)
+    assert prop(cur, 'NEW_FORM') is None
+    name = 'tst-fn-' + uuid.uuid4().hex[:6]
+    assert 'ίδιοι' in fails(cur, "ui.press('CTL.NEWUSER');", GLOBAL__BK_TOKEN=t, CTL__U_NAME=name, CTL__U_FULL='Test',
+                            CTL__U_ROLE='TELLER', CTL__U_PW=PW, CTL__U_PW2='other')
+    run(cur, "ui.press('CTL.NEWUSER');", GLOBAL__BK_TOKEN=t, CTL__U_NAME=name, CTL__U_FULL='Test Νέος', CTL__U_ROLE='TELLER',
+        CTL__U_PW=PW, CTL__U_PW2=PW)
+    uid, h, s, n = cur.execute('select id, pw_hash, pw_salt, pw_iter from bk_user where username = :u', u=name).fetchone()
+    assert hashlib.pbkdf2_hmac('sha256', PW.encode(), s, n) == h and n == 120000        # (as bk-api: Java can check it)
+    assert token_of(cur, name)                                                          # and BK_AUTH
+    run(cur, "ui.press('CTL.SETROLE');", GLOBAL__BK_TOKEN=t, USR__ID=str(uid), CTL__U_ROLE='MANAGER')
+    assert cur.execute('select role from bk_user where id = :u', u=uid).fetchone()[0] == 'MANAGER'
+    run(cur, "ui.press('CTL.SETPW');", GLOBAL__BK_TOKEN=t, USR__ID=str(uid), CTL__U_PW='Allos-kodikos-1', CTL__U_PW2='Allos-kodikos-1')
+    assert 'BK-141' in str(pytest.raises(oracledb.DatabaseError, token_of, cur, name).value)
+    run(cur, "ui.press('CTL.TOGGLEACT');", GLOBAL__BK_TOKEN=t, USR__ID=str(uid))
+    assert cur.execute('select active from bk_user where id = :u', u=uid).fetchone()[0] == 'N'
+    assert 'BK-144' in fails(cur, "ui.press('CTL.NEWUSER');", GLOBAL__BK_TOKEN=t, CTL__U_NAME='X Y', CTL__U_FULL='Test',
+                             CTL__U_ROLE='TELLER', CTL__U_PW=PW, CTL__U_PW2=PW)
+    # always an active ADMIN: the only one cannot leave
+    others = cur.execute("select count(*) from bk_user where role = 'ADMIN' and active = 'Y' and username <> :u", u=admin).fetchone()[0]
+    if others == 0:
+        aid = cur.execute('select id from bk_user where username = :u', u=admin).fetchone()[0]
+        assert 'BK-144' in fails(cur, "ui.press('CTL.SETROLE');", GLOBAL__BK_TOKEN=t, USR__ID=str(aid), CTL__U_ROLE='TELLER')
+    cur.execute("delete from bk_user where username in (:a, :b)", a=admin, b=name)
+    cur.connection.commit()
+
+
+@needs_db
+def test_the_menu_by_role(cur):
+    compile_ui(cur, 'BK_MAIN')
+    run(cur, 'ui.init;', GLOBAL__BK_TOKEN=LOGIN['teller'])
+    assert prop(cur, 'CTL.GO_BK_USERS#11') == 'FALSE' and prop(cur, 'MENU SETUP_MENU.USERS#11') == 'FALSE'
+    assert prop(cur, 'CTL.GO_BK_CARDS#11') is None

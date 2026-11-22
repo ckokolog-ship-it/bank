@@ -421,3 +421,18 @@ select l.id line_id, l.account_id, l.entry_id, e.kind, e.channel, e.book_date, e
        l.op, l.debit, l.credit
 from bk_line l, bk_entry e
 where e.id = l.entry_id and l.account_id is not null;
+
+-- the rules of the movements, with the code of their product and the IBAN of their account (BK_RULE keeps its key)
+create or replace view bk_rule_v as
+select r.id, case when r.account_id is not null then 'ACCOUNT' when r.product_id is not null then 'PRODUCT' else 'BANK' end lvl,
+       p.code product, a.iban, r.product_id, r.account_id, r.op, r.channel, r.allowed, r.min_amount, r.max_amount,
+       r.day_amount, r.day_count, r.month_amount, r.month_count, r.free_month, r.fee, r.min_balance
+from bk_rule r, bk_product p, bk_account a
+where p.id (+) = r.product_id and a.id (+) = r.account_id;
+
+-- the cards, with the IBAN of their account and the name of their holder (BK_CARD keeps its key); never the PIN
+create or replace view bk_card_v as
+select k.id, k.pan, k.account_id, a.iban, c.name holder, k.issued_on, k.expires, k.status,
+       case when k.pin_hash is null then 'N' else 'Y' end has_pin, k.pin_failed
+from bk_card k, bk_account a, bk_customer c
+where a.id = k.account_id and c.id = k.customer_id;

@@ -1,5 +1,5 @@
 -- BK_UI.pls -- the package UI of the forms of the bank (BK_LOGIN, BK_MAIN, BK_CUSTOMERS, BK_ACCOUNTS, BK_MOVE,
--- BK_DAY): mkforms.py puts it in each form. The triggers only call it:
+-- BK_DAY, BK_RULES, BK_PRODUCTS, BK_CARDS, BK_ATMS, BK_USERS): mkforms.py puts it in each form. The triggers only call it:
 --   WHEN-NEW-FORM-INSTANCE   ui.init
 --   WHEN-NEW-RECORD-INSTANCE ui.master(:SYSTEM.TRIGGER_BLOCK)   (a master: its detail again)
 --   WHEN-BUTTON-PRESSED      ui.press(:SYSTEM.TRIGGER_ITEM)   (the toolbar: ui.tool)
@@ -97,6 +97,23 @@ PACKAGE BODY ui IS
     RETURN TRUE;
   END;
 
+  -- a block of a higher role: read only (its rows seen, not changed)
+  PROCEDURE read_only_block(p_block VARCHAR2) IS
+  BEGIN
+    set_block_property(p_block, INSERT_ALLOWED, PROPERTY_FALSE);
+    set_block_property(p_block, UPDATE_ALLOWED, PROPERTY_FALSE);
+    set_block_property(p_block, DELETE_ALLOWED, PROPERTY_FALSE);
+  END;
+
+  -- the master block again, all of it
+  PROCEDURE requery IS
+  BEGIN
+    go_block(c_block);
+    set_block_property(c_block, DEFAULT_WHERE, c_where);
+    g_master := NULL;
+    execute_query;
+  END;
+
   -- the master block shown again with one record only (after a change by BK_CORE: the same record on the screen)
   PROCEDURE show_only(p_id NUMBER) IS
   BEGIN
@@ -153,6 +170,7 @@ PACKAGE BODY ui IS
   -- what each form needs when it opens
   PROCEDURE init_form IS
     acc VARCHAR2(40);
+    t2 VARCHAR2(40);
   BEGIN
     IF c_form = 'BK_MAIN' THEN
       copy('Εργάσιμη ημέρα ' || to_char(bk_core.open_day, 'DD/MM/YYYY') || '  ·  ' || g_user || ' (' || g_role || ')',
@@ -170,6 +188,13 @@ PACKAGE BODY ui IS
       END IF;
     ELSIF c_form = 'BK_DAY' THEN
       day_refresh;
+    ELSIF c_form = 'BK_PRODUCTS' THEN
+      copy(to_char(bk_core.open_day, 'DD/MM/YYYY'), 'CTL.N_FROM');
+    ELSIF c_form = 'BK_ATMS' THEN
+      SELECT max(CASE name WHEN 'ATM_NOTES' THEN value END), max(CASE name WHEN 'ATM_MAX_NOTES' THEN value END)
+      INTO acc, t2 FROM bk_setting WHERE name IN ('ATM_NOTES', 'ATM_MAX_NOTES');
+      copy(acc, 'CTL.S_NOTES');
+      copy(t2, 'CTL.S_MAX');
     END IF;
   END;
 
@@ -374,6 +399,181 @@ PACKAGE BODY ui IS
       copy('', 'CTL.M_AMOUNT');
       copy('', 'CTL.M_DESCR');
       move_refresh;
+
+    -- BK_RULES: the one selected to the fields; a rule set from them (again with the same keys: replaced); removed
+    ELSIF p_item = 'CTL.LOADRULE' THEN
+      IF num('RULE.ID') IS NULL THEN
+        fail('Πρώτα ένας κανόνας από τη λίστα');
+      END IF;
+      copy(name_in('RULE.PRODUCT'), 'CTL.R_PRODUCT');
+      copy(name_in('RULE.ACCOUNT_ID'), 'CTL.R_ACC_ID');
+      copy(name_in('RULE.IBAN'), 'CTL.R_ACC_TEXT');
+      copy(name_in('RULE.OP'), 'CTL.R_OP');
+      copy(name_in('RULE.CHANNEL'), 'CTL.R_CHANNEL');
+      copy(name_in('RULE.ALLOWED'), 'CTL.R_ALLOWED');
+      copy(name_in('RULE.MIN_AMOUNT'), 'CTL.R_MIN');
+      copy(name_in('RULE.MAX_AMOUNT'), 'CTL.R_MAX');
+      copy(name_in('RULE.DAY_AMOUNT'), 'CTL.R_DAYAMT');
+      copy(name_in('RULE.DAY_COUNT'), 'CTL.R_DAYCNT');
+      copy(name_in('RULE.MONTH_AMOUNT'), 'CTL.R_MONAMT');
+      copy(name_in('RULE.MONTH_COUNT'), 'CTL.R_MONCNT');
+      copy(name_in('RULE.FREE_MONTH'), 'CTL.R_FREE');
+      copy(name_in('RULE.FEE'), 'CTL.R_FEE');
+      copy(name_in('RULE.MIN_BALANCE'), 'CTL.R_MINBAL');
+    ELSIF p_item = 'CTL.CLEARRULE' THEN
+      copy('', 'CTL.R_PRODUCT');
+      copy('', 'CTL.R_ACC_ID');
+      copy('', 'CTL.R_ACC_TEXT');
+      copy('', 'CTL.R_ALLOWED');
+      copy('', 'CTL.R_MIN');
+      copy('', 'CTL.R_MAX');
+      copy('', 'CTL.R_DAYAMT');
+      copy('', 'CTL.R_DAYCNT');
+      copy('', 'CTL.R_MONAMT');
+      copy('', 'CTL.R_MONCNT');
+      copy('', 'CTL.R_FREE');
+      copy('', 'CTL.R_FEE');
+      copy('', 'CTL.R_MINBAL');
+    ELSIF p_item = 'CTL.SETRULE' THEN
+      IF name_in('CTL.R_ACC_TEXT') IS NULL THEN
+        copy('', 'CTL.R_ACC_ID');            -- (the text cleared: the account too)
+      END IF;
+      id_ := bk_core.set_rule(p_product_code => name_in('CTL.R_PRODUCT'), p_account_id => num('CTL.R_ACC_ID'),
+                              p_op => name_in('CTL.R_OP'), p_channel => name_in('CTL.R_CHANNEL'),
+                              p_allowed => name_in('CTL.R_ALLOWED'),
+                              p_min_amount => num('CTL.R_MIN'), p_max_amount => num('CTL.R_MAX'),
+                              p_day_amount => num('CTL.R_DAYAMT'), p_day_count => num('CTL.R_DAYCNT'),
+                              p_month_amount => num('CTL.R_MONAMT'), p_month_count => num('CTL.R_MONCNT'),
+                              p_free_month => num('CTL.R_FREE'), p_fee => num('CTL.R_FEE'),
+                              p_min_balance => num('CTL.R_MINBAL'));
+      forms_ddl('COMMIT');
+      requery;
+      message('Ο κανόνας αποθηκεύτηκε (#' || id_ || ')');
+    ELSIF p_item = 'CTL.REMOVERULE' THEN
+      id_ := num('RULE.ID');
+      IF id_ IS NULL THEN
+        fail('Πρώτα ένας κανόνας από τη λίστα');
+      END IF;
+      bk_core.remove_rule(id_);
+      forms_ddl('COMMIT');
+      requery;
+      message('Ο κανόνας αφαιρέθηκε');
+
+    -- BK_PRODUCTS: a new rate of the product on the screen, from the business day on
+    ELSIF p_item = 'CTL.SETRATE' THEN
+      id_ := num('PROD.ID');
+      d := date_in('CTL.N_FROM');
+      IF id_ IS NULL THEN
+        fail('Πρώτα ένα προϊόν στην οθόνη');
+      END IF;
+      IF d < bk_core.open_day THEN
+        fail('Ένα επιτόκιο αλλάζει από την εργάσιμη ημέρα και μετά: οι τόκοι των κλεισμένων ημερών δεν ξαναμετριούνται');
+      END IF;
+      bk_core.set_rate(id_, d, nvl(num('CTL.N_MIN'), 0), num('CTL.N_RATE'));
+      forms_ddl('COMMIT');
+      g_master := NULL;
+      go_block('RATE');
+      execute_query;
+      go_block(c_block);
+      message('Το επιτόκιο αποθηκεύτηκε');
+
+    -- BK_CARDS: the card on the screen; a new card
+    ELSIF p_item IN ('CTL.NEWPIN', 'CTL.BLOCKCARD', 'CTL.ACTIVATE', 'CTL.CANCELCARD') THEN
+      id_ := num('CARD.ID');
+      IF id_ IS NULL THEN
+        fail('Πρώτα μια κάρτα στην οθόνη');
+      END IF;
+      IF p_item = 'CTL.NEWPIN' THEN
+        t := bk_auth.new_pin(id_);
+        forms_ddl('COMMIT');
+        copy(t || '   (' || name_in('CARD.PAN') || ')', 'CTL.C_PIN');
+        t := 'Το PIN για τον κάτοχο: δεν φαίνεται ξανά';
+      ELSE
+        IF p_item = 'CTL.BLOCKCARD' THEN
+          st := 'B';
+        ELSIF p_item = 'CTL.ACTIVATE' THEN
+          st := 'A';
+        ELSE
+          st := 'C';
+        END IF;
+        bk_core.set_card_status(id_, st);
+        forms_ddl('COMMIT');
+        copy('', 'CTL.C_PIN');
+        t := 'Η κατάσταση της κάρτας: ' || st;
+      END IF;
+      show_only(id_);
+      message(t);
+    ELSIF p_item = 'CTL.NEWCARD' THEN
+      acc := num('CTL.C_ACC_ID');
+      IF acc IS NULL THEN
+        fail('Πρώτα ένας λογαριασμός (λίστα)');
+      END IF;
+      id_ := bk_core.new_card(acc);
+      t := bk_auth.new_pin(id_);
+      forms_ddl('COMMIT');
+      show_only(id_);
+      SELECT pan INTO tok FROM bk_card WHERE id = id_;
+      copy(t || '   (' || tok || ')', 'CTL.C_PIN');
+      message('Νέα κάρτα ' || tok || ': το PIN για τον κάτοχο, δεν φαίνεται ξανά');
+
+    -- BK_ATMS: a cassette of the ATM on the screen; the notes of all of them
+    ELSIF p_item = 'CTL.FILL' THEN
+      id_ := num('ATMS.ID');
+      IF id_ IS NULL THEN
+        fail('Πρώτα ένα ATM στην οθόνη');
+      END IF;
+      bk_core.atm_fill(name_in('ATMS.CODE'), num('CTL.F_NOTE'), num('CTL.F_PIECES'));
+      forms_ddl('COMMIT');
+      copy('', 'CTL.F_PIECES');
+      show_only(id_);
+      message('Η κασέτα των ' || name_in('CTL.F_NOTE') || ' € άλλαξε');
+    ELSIF p_item = 'CTL.SETNOTES' THEN
+      bk_core.set_atm_notes(name_in('CTL.S_NOTES'), num('CTL.S_MAX'));
+      forms_ddl('COMMIT');
+      requery;
+      message('Τα χαρτονομίσματα των ATM αποθηκεύτηκαν');
+
+    -- BK_USERS: a new one; the one selected: a password, the role, active, unlocked
+    ELSIF p_item IN ('CTL.NEWUSER', 'CTL.SETPW') AND nvl(name_in('CTL.U_PW'), ' ') <> nvl(name_in('CTL.U_PW2'), ' ') THEN
+      fail('Οι δύο κωδικοί δεν είναι ίδιοι');
+    ELSIF p_item = 'CTL.NEWUSER' THEN
+      id_ := bk_auth.create_user(name_in('CTL.U_NAME'), name_in('CTL.U_FULL'), name_in('CTL.U_ROLE'), name_in('CTL.U_PW'));
+      forms_ddl('COMMIT');
+      copy('', 'CTL.U_PW');
+      copy('', 'CTL.U_PW2');
+      copy('', 'CTL.U_NAME');
+      copy('', 'CTL.U_FULL');
+      requery;
+      message('Ο χρήστης καταχωρίστηκε');
+    ELSIF p_item IN ('CTL.SETPW', 'CTL.SETROLE', 'CTL.TOGGLEACT', 'CTL.UNLOCK') THEN
+      id_ := num('USR.ID');
+      IF id_ IS NULL THEN
+        fail('Πρώτα ένας χρήστης από τη λίστα');
+      END IF;
+      IF p_item = 'CTL.SETPW' THEN
+        bk_auth.set_password(id_, name_in('CTL.U_PW'));
+        copy('', 'CTL.U_PW');
+        copy('', 'CTL.U_PW2');
+        t := 'Ο κωδικός άλλαξε: οι συνδέσεις του έκλεισαν';
+      ELSIF p_item = 'CTL.SETROLE' THEN
+        bk_auth.set_role(id_, name_in('CTL.U_ROLE'));
+        t := 'Ο ρόλος άλλαξε';
+      ELSIF p_item = 'CTL.TOGGLEACT' THEN
+        SELECT active INTO st FROM bk_user WHERE id = id_;
+        IF st = 'Y' THEN
+          bk_auth.set_active(id_, 'N');
+          t := 'Ο χρήστης απενεργοποιήθηκε';
+        ELSE
+          bk_auth.set_active(id_, 'Y');
+          t := 'Ο χρήστης ενεργοποιήθηκε';
+        END IF;
+      ELSE
+        bk_auth.unlock(id_);
+        t := 'Ο χρήστης ξεκλειδώθηκε';
+      END IF;
+      forms_ddl('COMMIT');
+      requery;
+      message(t);
 
     -- BK_DAY
     ELSIF p_item = 'CTL.REFRESH' THEN

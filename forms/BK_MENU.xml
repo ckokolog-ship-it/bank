@@ -5,6 +5,7 @@
       <MenuItem Name="FILE" Label="Archeio" CommandType="Menu" SubMenuName="FILE_MENU"/>
       <MenuItem Name="REC" Label="Eggrafes" CommandType="Menu" SubMenuName="REC_MENU"/>
       <MenuItem Name="BANK" Label="Trapeza" CommandType="Menu" SubMenuName="BANK_MENU"/>
+      <MenuItem Name="SETUP" Label="Rythmiseis" CommandType="Menu" SubMenuName="SETUP_MENU"/>
     </Menu>
     <Menu Name="FILE_MENU">
       <MenuItem Name="MAIN" Label="Archiko menoy" CommandType="PL/SQL" MenuItemCode="new_form('BK_MAIN');"/>
@@ -21,7 +22,14 @@
       <MenuItem Name="CUSTOMERS" Label="Pelates" CommandType="PL/SQL" MenuItemCode="new_form('BK_CUSTOMERS');"/>
       <MenuItem Name="ACCOUNTS" Label="Logariasmoi" CommandType="PL/SQL" MenuItemCode="new_form('BK_ACCOUNTS');"/>
       <MenuItem Name="MOVE" Label="Kinisi" CommandType="PL/SQL" MenuItemCode="new_form('BK_MOVE');"/>
+      <MenuItem Name="CARDS" Label="Kartes" CommandType="PL/SQL" MenuItemCode="new_form('BK_CARDS');"/>
       <MenuItem Name="DAY" Label="Imera kai kleisimo" CommandType="PL/SQL" MenuItemCode="new_form('BK_DAY');"/>
+    </Menu>
+    <Menu Name="SETUP_MENU">
+      <MenuItem Name="RULES" Label="Kanones kiniseon" CommandType="PL/SQL" MenuItemCode="new_form('BK_RULES');"/>
+      <MenuItem Name="PRODUCTS" Label="Proionta kai epitokia" CommandType="PL/SQL" MenuItemCode="new_form('BK_PRODUCTS');"/>
+      <MenuItem Name="ATMS" Label="ATM" CommandType="PL/SQL" MenuItemCode="new_form('BK_ATMS');"/>
+      <MenuItem Name="USERS" Label="Christes" CommandType="PL/SQL" MenuItemCode="new_form('BK_USERS');"/>
     </Menu>
   </MenuModule>
 </Module>
