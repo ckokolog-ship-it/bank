@@ -13,6 +13,9 @@
 ```bash
 sudo -iu oracle git -C bank pull
 
+# 0. μια εικονική οθόνη για το XML2Forms (το Forms Jdapi θέλει οθόνη X): μία φορά
+sudo dnf install -y xorg-x11-server-Xvfb
+
 # 1. το DBMS_CRYPTO για το BANK (το login των φορμών): ζητά τον κωδικό του SYS
 sudo -iu oracle bash -c 'cd ~/bank/db && sqlplus sys@localhost:1521/FREEPDB1 as sysdba @GRANT_CRYPTO.sql'
 
@@ -34,6 +37,18 @@ java -jar C:\forms\frmsal.jar -url "http://forms1.home.lan:9001/forms/frmservlet
 ```
 
 Η σύνδεση γίνεται με τους **ίδιους χρήστες με τις σελίδες** (`install_service.sh --add-user`, ή η σελίδα «Χρήστες»).
+
+**Γιατί το Xvfb:**
+- το XML2Forms σταματά με `Error initialising the Forms Jdapi: _jni_initialize: Failed to create new forms context` όταν δεν έχει οθόνη X·
+- με το Xvfb, το `build_forms.sh` χρησιμοποιεί εικονική οθόνη (`xvfb-run`), οπότε τρέχει και από `sudo -iu oracle`, χωρίς MobaXterm.
+
+**Χωρίς Xvfb**, το X11-forwarding του MobaXterm δουλεύει μόνο σε session **κατευθείαν ως `oracle`**. Μέσω `sudo` το `DISPLAY` περνά, αλλά το «κλειδί» του X ανήκει στον `chris`, και φαίνεται το `MoTTY X11 proxy: No authorisation provided`. Τότε, πριν από το `build_forms.sh`, ως `chris`:
+
+```bash
+xauth extract - $DISPLAY | sudo -iu oracle xauth merge -
+```
+
+Το script το εντοπίζει και γράφει ποια από τις δύο λύσεις χρειάζεται.
 
 **Μετά από ένα νέο PR:**
 1. `git pull`·

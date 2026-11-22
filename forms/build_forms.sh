@@ -6,6 +6,12 @@
 #
 # /@BK_DB: the wallet of the domain (bk_wallet.sh, the alias BK_DB of the user BANK). The words of the forms
 # (BK_TEXT) and the login (BK_AUTH) are in the database already: INSTALL.sql (and GRANT_CRYPTO.sql once).
+#
+# XML2Forms (the Forms Jdapi) wants an X display it may use ("_jni_initialize: Failed to create new forms
+# context" without one). A virtual one, if there is xvfb-run (sudo dnf install -y xorg-x11-server-Xvfb): no
+# screen needed at all, from sudo -iu oracle too. Else the DISPLAY of the session: MobaXterm with X11
+# forwarding, logged in as oracle itself (through sudo the cookie of X belongs to the user who logged in; this
+# script says how to hand it over).
 set -u
 cd "$(dirname "$0")" || exit 1
 HERE=$(pwd)
@@ -28,6 +34,23 @@ for f in "$DOMAIN"/config/fmwconfig/components/FORMS/instances/*/bin/frmcmp_batc
   [ -x "$f" ] && { CMP=$f; break; }
 done
 [ -n "$CMP" ] || { echo "frmcmp_batch.sh: not found"; exit 1; }
+# the display of XML2Forms
+RUNX=
+if command -v xvfb-run > /dev/null 2>&1; then
+  RUNX="xvfb-run -a"
+  echo "== XML2Forms on a virtual display (xvfb-run)"
+else
+  # a XAUTHORITY of another user (sudo keeps it): not readable here, so not used (~/.Xauthority instead)
+  if [ -n "${XAUTHORITY:-}" ] && [ ! -r "$XAUTHORITY" ]; then unset XAUTHORITY; fi
+  if [ -z "${DISPLAY:-}" ]; then
+    echo "== [!] no DISPLAY and no xvfb-run: XML2Forms needs a display. Once: sudo dnf install -y xorg-x11-server-Xvfb"
+  elif command -v xauth > /dev/null 2>&1 && [ -z "$(xauth list "$DISPLAY" 2> /dev/null)" ]; then
+    echo "== [!] DISPLAY=$DISPLAY but no cookie of X for $(id -un) (a session through sudo). Either once:"
+    echo "        sudo dnf install -y xorg-x11-server-Xvfb      (then no display is needed)"
+    echo "    or, from the session of the user who logged in (chris), before this script:"
+    echo "        xauth extract - \$DISPLAY | sudo -iu oracle xauth merge -"
+  fi
+fi
 ENV=$(find "$DOMAIN" -name default.env 2>/dev/null | grep -v /tmp/ | head -1)
 FP=$(grep '^FORMS_PATH=' "$ENV" 2>/dev/null | cut -d= -f2 | cut -d: -f1)
 [ -d "$FP" ] || { echo "FORMS_PATH of default.env ($ENV): no folder"; exit 1; }
@@ -41,7 +64,7 @@ for name in $FORMS; do
   [ -f "$name.xml" ] || { echo "== $name: no $name.xml"; continue; }
   rm -f "$name.$src"
   echo "== $name.xml -> $name.$src"
-  LD_LIBRARY_PATH=$MW/lib:${LD_LIBRARY_PATH:-} java -cp "$CP" oracle.forms.util.xmltools.XML2Forms OVERWRITE=YES "$name.xml"
+  LD_LIBRARY_PATH=$MW/lib:${LD_LIBRARY_PATH:-} $RUNX java -cp "$CP" oracle.forms.util.xmltools.XML2Forms OVERWRITE=YES "$name.xml"
   [ -f "$name.$src" ] || { echo "== no $name.$src: the messages above"; continue; }
   mv "$name.$src" "$FP"/
   cd "$FP" || exit 1
