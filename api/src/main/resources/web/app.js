@@ -543,17 +543,38 @@ async function cardsTab(a) {
 
 // ---- the ATMs
 async function atms() {
-  const rows = await api('atms');
-  const box = h('div', { class: 'card' }, h('h2', null, 'ATM'));
-  box.append(table(['Κωδικός', 'Όνομα', 'Διεύθυνση', '#Μετρητά', 'Κατάσταση', ''], rows.map((m) => h('tr', null,
-    td(m.code, 'mono'), td(m.name), td(m.address), tdn(eur(m.cash)), td(m.active === 'Y' ? 'Σε λειτουργία' : h('span', { class: 'muted' }, 'Εκτός')),
-    td(h('div', { class: 'actions' },
-      h('a', { href: '/atm/?atm=' + m.code, target: '_blank', rel: 'noopener' }, 'Οθόνη ATM'),
-      can('MANAGER') ? h('button', { onclick: async () => {
-        const v = prompt('Μετρητά στο ' + m.code + ' (€, σε δεκάδες· αρνητικό: αφαίρεση)', '10000');
-        if (v == null) return;
-        try { await api('atms/' + m.code + '/cash', { amount: Number(v.replace(',', '.')) }); toast('Έγινε'); route(); } catch (e) { toast(e.message, true); }
-      } }, 'Μετρητά') : null))))));
+  const r = await api('atms');
+  const rows = r.atms;
+  const box = h('div', { class: 'card' }, h('h2', null, 'ATM'),
+    h('p', { class: 'muted' }, 'Τα ATM δίνουν χαρτονομίσματα των ' + r.notes.join(', ') + ' €, ως ' + r.max_notes + ' σε μία ανάληψη. '
+      + 'Οι καταθέσεις πάνε σε δική τους θήκη και δεν ξαναδίνονται.'));
+  box.append(table(['Κωδικός', 'Όνομα', 'Διεύθυνση', 'Κασέτες', '#Μετρητά', '#Καταθέσεις', 'Κατάσταση', ''], rows.map((m) => h('tr', null,
+    td(m.code, 'mono'), td(m.name), td(m.address),
+    td(m.cassettes.map((k) => h('div', { class: k.pieces === 0 ? 'warn' : null }, k.note + ' €: ' + k.pieces.toLocaleString('el-GR')))),
+    tdn(eur(m.cash)), tdn(eur(m.deposits)), td(m.active === 'Y' ? 'Σε λειτουργία' : h('span', { class: 'muted' }, 'Εκτός')),
+    td(h('a', { href: '/atm/?atm=' + m.code, target: '_blank', rel: 'noopener' }, 'Οθόνη ATM'))))));
+  if (can('MANAGER')) {
+    box.append(h('h3', null, 'Γέμισμα κασέτας'), form([
+      field('ATM', sel('code', Object.fromEntries(rows.map((m) => [m.code, m.code + ' · ' + m.name])))),
+      field('Χαρτονόμισμα', sel('note', Object.fromEntries(r.notes.map((n) => [String(n), n + ' €'])))),
+      field('Χαρτονομίσματα (αρνητικό: αφαίρεση)', h('input', { name: 'pieces', 'data-num': 1, inputmode: 'numeric', required: true }))],
+    async (f) => {
+      const v = values(f);
+      await api('atms/' + v.code + '/fill', { note: Number(v.note), pieces: v.pieces });
+      toast('Έγινε');
+      route();
+    }, 'Γέμισμα'));
+    box.append(h('h3', null, 'Τα χαρτονομίσματα των ATM'), h('p', { class: 'muted' },
+      'Ποια χαρτονομίσματα δίνουν όλα τα ATM (από 5, 10, 20, 50, 100, 200, 500 €), και πόσα το πολύ σε μία ανάληψη. '
+      + 'Ένα νέο: μια άδεια κασέτα σε κάθε ATM. Ένα που φεύγει: πρώτα αδειάζουν οι κασέτες του.'),
+    form([field('Χαρτονομίσματα (€, με κόμμα)', h('input', { name: 'notes', value: r.notes.slice().reverse().join(','), required: true })),
+      field('Το πολύ σε μία ανάληψη', h('input', { name: 'max_notes', 'data-num': 1, inputmode: 'numeric', value: String(r.max_notes) }))],
+    async (f) => {
+      await api('atms/notes', values(f));
+      toast('Αποθηκεύτηκε');
+      route();
+    }));
+  }
   box.append(h('p', { class: 'muted' }, 'Οι αναλήψεις από ATM γίνονται με κάρτα και PIN (λογαριασμός → καρτέλα «Κάρτες»), μέσα στους κανόνες του καναλιού ATM.'));
   if (can('MANAGER')) {
     const result = h('div');

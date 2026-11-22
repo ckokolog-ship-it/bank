@@ -8,6 +8,7 @@ drop view if exists bk_check;
 drop view if exists bk_statement;
 drop view if exists bk_value_balance;
 drop table if exists bk_card purge;
+drop table if exists bk_atm_note purge;
 drop table if exists bk_atm purge;
 drop table if exists bk_session purge;
 drop table if exists bk_user purge;
