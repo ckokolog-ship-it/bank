@@ -29,6 +29,7 @@
     <Menu Name="SETUP_MENU">
       <MenuItem Name="RULES" Label="Kanones kiniseon" CommandType="PL/SQL" MenuItemCode="new_form('BK_RULES');"/>
       <MenuItem Name="PRODUCTS" Label="Proionta kai epitokia" CommandType="PL/SQL" MenuItemCode="new_form('BK_PRODUCTS');"/>
+      <MenuItem Name="FX" Label="Nomismata kai isotimies" CommandType="PL/SQL" MenuItemCode="new_form('BK_FX');"/>
       <MenuItem Name="ATMS" Label="ATM" CommandType="PL/SQL" MenuItemCode="new_form('BK_ATMS');"/>
       <MenuItem Name="USERS" Label="Christes" CommandType="PL/SQL" MenuItemCode="new_form('BK_USERS');"/>
     </Menu>

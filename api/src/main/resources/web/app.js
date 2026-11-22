@@ -35,6 +35,10 @@ function h(tag, attrs, ...kids) {
 const $ = (id) => document.getElementById(id);
 const money = (v) => v == null ? '' : Number(v).toLocaleString('el-GR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const eur = (v) => v == null ? '' : money(v) + ' €';
+// an amount in its currency (the euro: €)
+const amt = (v, cur) => v == null ? '' : money(v) + ' ' + (!cur || cur === 'EUR' ? '€' : cur);
+// the amount it was in, in another currency, at its rate
+const orig = (x) => x && x.orig_currency && x.op !== 'FEE' ? amt(x.orig_amount, x.orig_currency) + ' × ' + num(x.fx_rate, 6) : '';
 const num = (v, d = 4) => v == null ? '' : Number(v).toLocaleString('el-GR', { maximumFractionDigits: d });
 const date = (v) => v ? v.slice(8, 10) + '/' + v.slice(5, 7) + '/' + v.slice(0, 4) : '';
 const iban = (v) => v ? v.replace(/(.{4})/g, '$1 ').trim() : '';
@@ -165,8 +169,8 @@ $('logout').addEventListener('click', () => logout(false));
 const MENU = [
   { key: 'customers', title: '👥 Πελάτες', items: [['customers', 'Αναζήτηση'], ['customers/new', 'Νέος πελάτης']] },
   { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['move', 'Νέα κίνηση']] },
-  { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'], ['atms', 'ATM'],
-    ['day', 'Ημέρα και κλείσιμο']] },
+  { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'],
+    ['fx', 'Νομίσματα και ισοτιμίες'], ['atms', 'ATM'], ['day', 'Ημέρα και κλείσιμο']] },
   { key: 'admin', title: '🔐 Διαχείριση', role: 'ADMIN', items: [['users', 'Χρήστες']] }];
 // the item of the menu of a page (a customer: of the customers, an account or an entry: of the accounts)
 const MENU_OF = { customer: 'customers', account: 'accounts', entry: 'accounts' };
@@ -217,7 +221,7 @@ async function route() {
   const m = $('main');
   m.replaceChildren(h('p', { class: 'muted' }, 'Φόρτωση…'));
   try {
-    const f = { customers, customer, accounts, account, move, entry, rules, products, atms, day, users }[page] || customers;
+    const f = { customers, customer, accounts, account, move, entry, rules, products, fx, atms, day, users }[page] || customers;
     const el = await f(id, extra);
     m.replaceChildren(el);
   } catch (e) {
@@ -280,6 +284,16 @@ function newCustomer(box) {
 async function customer(id) {
   const [c, prods] = await Promise.all([api('customers/' + id), api('products')]);
   const box = h('div');
+  // the currencies of the product chosen (the first: by default)
+  const live = prods.filter((p) => p.active === 'Y');
+  const prodSel = sel('product', Object.fromEntries(live.map((p) => [p.code, p.name + ' (' + p.code + ')'])));
+  const curSel = h('select', { name: 'currency' });
+  const curs = () => {
+    const p = live.find((x) => x.code === prodSel.value);
+    curSel.replaceChildren(...String(p ? p.currencies : 'EUR').split(',').map((k) => h('option', { value: k }, k)));
+  };
+  prodSel.addEventListener('change', curs);
+  curs();
   const edit = h('div', { class: 'hidden' }, form([...customerFields(c),
     field('Ενεργός', sel('active', { Y: 'Ναι', N: 'Όχι' }, c.active))], async (f) => {
     await api('customers/' + id, values(f));
@@ -297,9 +311,10 @@ async function customer(id) {
     table(['IBAN', 'Προϊόν', 'Όνομα', 'Δικαιούχος', 'Κατάσταση', '#Υπόλοιπο'],
       c.accounts.map((a) => h('tr', { class: 'click', onclick: () => { location.hash = '#/account/' + a.id; } },
         td(iban(a.iban), 'mono'), td(a.product_name), td(a.name), td(a.role === 'P' ? 'Κύριος' : 'Συνδικαιούχος'),
-        td(h('span', { class: 'badge ' + a.status }, STATUS[a.status])), tdn(eur(a.balance))))),
+        td(h('span', { class: 'badge ' + a.status }, STATUS[a.status])), tdn(amt(a.balance, a.currency))))),
     c.active === 'Y' ? h('div', null, h('h3', null, 'Νέος λογαριασμός'), form([
-      field('Προϊόν', sel('product', Object.fromEntries(prods.filter((p) => p.active === 'Y').map((p) => [p.code, p.name + ' (' + p.code + ')'])))),
+      field('Προϊόν', prodSel),
+      field('Νόμισμα', curSel),
       field('Όνομα (προαιρετικά)', h('input', { name: 'name' })),
       field('Όριο υπερανάληψης', h('input', { name: 'od_limit', 'data-num': 1, inputmode: 'decimal', value: '0' }))],
     async (f) => {
@@ -327,7 +342,7 @@ async function accounts() {
       r.rows.map((a) => h('tr', { class: 'click', onclick: () => { location.hash = '#/account/' + a.id; } },
         td(iban(a.iban), 'mono'), td(a.product), td(a.holder + (a.holders > 1 ? ' +' + (a.holders - 1) : '')),
         td(h('span', { class: 'badge ' + a.status }, STATUS[a.status])),
-        h('td', { class: 'num' + (a.balance < 0 ? ' bad' : '') }, eur(a.balance)), tdn(a.od_limit ? eur(a.od_limit) : ''),
+        h('td', { class: 'num' + (a.balance < 0 ? ' bad' : '') }, amt(a.balance, a.currency)), tdn(a.od_limit ? amt(a.od_limit, a.currency) : ''),
         tdn(num(a.accrued, 2))))),
     pager(r.total, offset, (o) => { offset = o; load(); }));
   }
@@ -364,8 +379,9 @@ async function account(id, tab) {
     h('h2', null, iban(a.iban), ' ', h('span', { class: 'badge ' + a.status }, STATUS[a.status])),
     h('p', { class: 'muted' }, a.product_name + ' (' + a.product + ')' + (a.name ? ' · ' + a.name : '') + ' · άνοιξε ' + date(a.opened_on)
       + (a.closed_on ? ' · έκλεισε ' + date(a.closed_on) : '')),
-    h('div', { class: 'kv' }, kv('Υπόλοιπο', eur(a.balance)), kv('Διαθέσιμο', eur(a.available)),
-      kv('Όριο υπερανάληψης', eur(a.od_limit)), kv('Δεδουλευμένοι τόκοι', eur(a.accrued)),
+    h('div', { class: 'kv' }, kv('Νόμισμα', a.currency), kv('Υπόλοιπο', amt(a.balance, a.currency)),
+      kv('Διαθέσιμο', amt(a.available, a.currency)),
+      kv('Όριο υπερανάληψης', amt(a.od_limit, a.currency)), kv('Δεδουλευμένοι τόκοι', amt(a.accrued, a.currency)),
       kv('Επιτόκιο τώρα', num(a.rate_now) + ' %'),
       kv('Τόκοι', a.day_basis + ', κεφαλαιοποίηση ανά ' + CAP[a.cap_every] + ', φόρος ' + num(a.tax_rate) + ' %')),
     actions));
@@ -396,15 +412,16 @@ async function statementTab(a) {
   const list = h('div');
   const p = period(async (from, to) => {
     const r = await api('accounts/' + a.id + '/statement?from=' + from + '&to=' + to);
-    list.replaceChildren(table(['Λογισμός', 'Αξία', 'Κίνηση', 'Κανάλι', 'Περιγραφή', '#Χρέωση', '#Πίστωση', '#Υπόλοιπο', 'Εγγραφή'],
-      [h('tr', null, h('td', { colspan: 7, class: 'muted' }, 'Από μεταφορά'), tdn(eur(r.carry_in)), td('')),
+    list.replaceChildren(table(['Λογισμός', 'Αξία', 'Κίνηση', 'Κανάλι', 'Περιγραφή', 'Αρχικό ποσό', '#Χρέωση', '#Πίστωση', '#Υπόλοιπο', 'Εγγραφή'],
+      [h('tr', null, h('td', { colspan: 8, class: 'muted' }, 'Από μεταφορά'), tdn(amt(r.carry_in, a.currency)), td('')),
         ...r.rows.map((x) => h('tr', { class: x.reversed_by ? 'rev' : null },
           td(date(x.book_date)), td(x.value_date !== x.book_date ? date(x.value_date) : ''),
           td(x.op === 'FEE' ? OPS.FEE : (KINDS[x.kind] || x.kind)), td(CHANNELS[x.channel] || x.channel), td(x.descr),
+          td(orig(x), 'muted'),
           tdn(x.debit ? money(x.debit) : ''), tdn(x.credit ? money(x.credit) : ''), tdn(money(x.balance)),
           td(h('a', { href: '#/entry/' + x.entry_id }, '#' + x.entry_id))))],
-      h('tr', null, h('td', { colspan: 5 }, 'Σύνολα · σε μεταφορά'), tdn(money(r.debit)), tdn(money(r.credit)),
-        tdn(eur(r.carry_out)), td(''))));
+      h('tr', null, h('td', { colspan: 6 }, 'Σύνολα · σε μεταφορά'), tdn(money(r.debit)), tdn(money(r.credit)),
+        tdn(amt(r.carry_out, a.currency)), td(''))));
   }, 30);
   out.append(p.el, list);
   await p.run();
@@ -419,13 +436,13 @@ async function interestTab(a) {
     list.replaceChildren(
       h('p', { class: 'muted' }, 'Ο τόκος μετριέται ανά διάστημα: σε ένα διάστημα το υπόλοιπο (ανά ημερομηνία αξίας) και το επιτόκιο μένουν ίδια. '
         + 'Τόκος = ημέρες × (υπόλοιπο × επιτόκιο / 100 / ημέρες του έτους, στρογγυλεμένο σε 6 δεκαδικά): ό,τι και μέρα προς μέρα. '
-        + 'Σύνολο των διαστημάτων: ', h('b', null, num(r.total, 6) + ' €')),
+        + 'Σύνολο των διαστημάτων: ', h('b', null, num(r.total, 6) + ' ' + (a.currency === 'EUR' ? '€' : a.currency))),
       h('h3', null, 'Κεφαλαιοποιήσεις'),
       table(['Ημέρα', '#Μικτός τόκος', '#Φόρος', '#Καθαρός', 'Εγγραφή'], r.capitalized.map((x) => h('tr', null,
-        td(date(x.day)), tdn(eur(x.gross)), tdn(eur(x.tax)), tdn(eur(x.net)),
+        td(date(x.day)), tdn(amt(x.gross, a.currency)), tdn(amt(x.tax, a.currency)), tdn(amt(x.net, a.currency)),
         td(x.entry_id ? h('a', { href: '#/entry/' + x.entry_id }, '#' + x.entry_id) : '—')))));
     list.append(h('h3', null, 'Τα διαστήματα'), table(['Από', 'Έως', '#Υπόλοιπο', '#Επιτόκιο %', '#Ημέρες', '#Έτος', '#Τόκος'],
-      r.stretches.slice().reverse().map((x) => h('tr', null, td(date(x.day_from)), td(date(x.day_to)), tdn(eur(x.balance)),
+      r.stretches.slice().reverse().map((x) => h('tr', null, td(date(x.day_from)), td(date(x.day_to)), tdn(amt(x.balance, a.currency)),
         tdn(num(x.rate)), tdn(x.days), tdn(x.year_days), h('td', { class: 'num' + (x.interest < 0 ? ' bad' : '') }, num(x.interest, 6))))));
   }, 90);
   out.append(p.el, list);
@@ -616,7 +633,7 @@ async function move(id) {
       }
       acc = a;
       info.replaceChildren(h('b', null, iban(a.iban)), ' · ' + a.holders.map((x) => x.name).join(', ') + ' · '
-        + STATUS[a.status] + ' · υπόλοιπο ' + eur(a.balance) + ' · διαθέσιμο ' + eur(a.available));
+        + STATUS[a.status] + ' · ' + a.currency + ' · υπόλοιπο ' + amt(a.balance, a.currency) + ' · διαθέσιμο ' + amt(a.available, a.currency));
     } catch (e) { info.replaceChildren(h('span', { class: 'error' }, e.message)); }
   }
   accIn.addEventListener('change', find);
@@ -631,7 +648,7 @@ async function move(id) {
   kind.addEventListener('change', show);
   const result = h('div');
   box.append(form([field('Λογαριασμός', accIn), field('Κίνηση', kind), to, ib,
-    field('Ποσό (€)', h('input', { name: 'amount', 'data-num': 1, inputmode: 'decimal', required: true })),
+    field('Ποσό (στο νόμισμα του λογαριασμού)', h('input', { name: 'amount', 'data-num': 1, inputmode: 'decimal', required: true })),
     field('Περιγραφή', h('input', { name: 'descr' })),
     field('Ημερομηνία αξίας', h('input', { name: 'value_date', type: 'date', min: S.day.open_day })),
     field('Κανάλι', sel('channel', { BR: 'Γκισέ', WEB: 'e-banking', ATM: 'ATM' }, 'BR'))], async (f) => {
@@ -641,7 +658,7 @@ async function move(id) {
     delete v.account;
     v.account_id = acc.id;
     const e = await api('movements', v);
-    toast((KINDS[e.kind] || e.kind) + ' #' + e.id + ': υπόλοιπο ' + eur(e.balance));
+    toast((KINDS[e.kind] || e.kind) + ' #' + e.id + ': υπόλοιπο ' + amt(e.balance, acc.currency));
     result.replaceChildren(entryView(e));
     f.querySelector('[name=amount]').value = '';
     f.querySelector('[name=descr]').value = '';
@@ -662,11 +679,14 @@ function entryView(e) {
     h('h3', null, 'Εγγραφή #' + e.id + ' · ' + (KINDS[e.kind] || e.kind) + ' · ' + (CHANNELS[e.channel] || e.channel)),
     h('p', { class: 'muted' }, 'Λογισμός ' + date(e.book_date) + ' · αξία ' + date(e.value_date) + ' · ' + (e.descr || '')
       + ' · από ' + e.created_by + ' (' + e.created_at + ')'),
+    e.orig_currency ? h('p', null, 'Αρχικό ποσό: ' + orig(e)) : null,
     e.reversal_of ? h('p', null, 'Αντιλογίζει την ', h('a', { href: '#/entry/' + e.reversal_of }, '#' + e.reversal_of)) : null,
     e.reversed_by ? h('p', { class: 'warn' }, 'Αντιλογίστηκε με την ', h('a', { href: '#/entry/' + e.reversed_by }, '#' + e.reversed_by)) : null,
-    table(['Λογαριασμός', 'Κίνηση', '#Χρέωση', '#Πίστωση'], e.lines.map((l) => h('tr', null,
+    table(['Λογαριασμός', 'Κίνηση', 'Νόμ.', '#Χρέωση', '#Πίστωση', '#Χρέωση €', '#Πίστωση €'], e.lines.map((l) => h('tr', null,
       td(l.account_id ? h('a', { href: '#/account/' + l.account_id, class: 'mono' }, iban(l.iban)) : l.gl_code + ' · ' + l.gl_name),
-      td(OPS[l.op] || ''), tdn(l.debit ? money(l.debit) : ''), tdn(l.credit ? money(l.credit) : '')))));
+      td(OPS[l.op] || ''), td(l.currency), tdn(l.debit ? money(l.debit) : ''), tdn(l.credit ? money(l.credit) : ''),
+      tdn(l.currency !== 'EUR' && l.base_debit ? money(l.base_debit) : ''),
+      tdn(l.currency !== 'EUR' && l.base_credit ? money(l.base_credit) : '')))));
 }
 
 async function entry(id) {
@@ -733,16 +753,27 @@ async function products() {
   const box = h('div');
   for (const p of rows) {
     const card = h('div', { class: 'card' }, h('h2', null, p.name + ' ', h('span', { class: 'muted mono' }, p.code)),
-      h('div', { class: 'kv' }, kv('Είδος', p.kind), kv('Βάση ημερών', p.day_basis), kv('Κεφαλαιοποίηση', 'ανά ' + CAP[p.cap_every]),
+      h('div', { class: 'kv' }, kv('Είδος', p.kind), kv('Νομίσματα', p.currencies.replace(/,/g, ', ')), kv('Βάση ημερών', p.day_basis),
+        kv('Κεφαλαιοποίηση', 'ανά ' + CAP[p.cap_every]),
         kv('Φόρος τόκων', num(p.tax_rate) + ' %'), kv('Επιτόκιο υπερανάληψης', num(p.od_rate) + ' %'), kv('Λογαριασμοί', p.accounts)),
       h('h3', null, 'Επιτόκια τώρα'),
-      table(['#Από υπόλοιπο', '#Επιτόκιο %'], p.rates_now.map((r) => h('tr', null, tdn(eur(r.min_balance)), tdn(num(r.rate))))),
+      table(['Νόμ.', '#Από υπόλοιπο', '#Επιτόκιο %'], Object.entries(p.rates_by_currency).flatMap(([k, rs]) =>
+        rs.map((r) => h('tr', null, td(k), tdn(amt(r.min_balance, k)), tdn(num(r.rate)))))),
       h('details', null, h('summary', null, 'Ιστορικό επιτοκίων'),
-        table(['Από', '#Κλιμάκιο', '#Επιτόκιο %'], p.rates.map((r) => h('tr', null, td(date(r.valid_from)), tdn(eur(r.min_balance)), tdn(num(r.rate)))))));
+        table(['Νόμ.', 'Από', '#Κλιμάκιο', '#Επιτόκιο %'], p.rates.map((r) => h('tr', null, td(r.currency), td(date(r.valid_from)),
+          tdn(amt(r.min_balance, r.currency)), tdn(num(r.rate)))))));
     if (can('MANAGER')) {
+      card.append(h('h3', null, 'Νομίσματα του προϊόντος'), form([
+        field('Νομίσματα (το πρώτο: αν δεν δοθεί άλλο)', h('input', { name: 'currencies', value: p.currencies, required: true }))],
+      async (f) => {
+        await api('products/' + p.code + '/currencies', values(f));
+        toast('Τα νομίσματα άλλαξαν');
+        route();
+      }));
       card.append(h('h3', null, 'Αλλαγή επιτοκίου'), form([
+        field('Νόμισμα', sel('currency', Object.fromEntries(p.currencies.split(',').map((k) => [k, k])))),
         field('Από', h('input', { name: 'valid_from', type: 'date', value: S.day.open_day, min: S.day.open_day })),
-        field('Κλιμάκιο από (€)', h('input', { name: 'min_balance', 'data-num': 1, value: '0', inputmode: 'decimal' })),
+        field('Κλιμάκιο από', h('input', { name: 'min_balance', 'data-num': 1, value: '0', inputmode: 'decimal' })),
         field('Επιτόκιο %', h('input', { name: 'rate', 'data-num': 1, inputmode: 'decimal', required: true }))], async (f) => {
         await api('products/' + p.code + '/rates', values(f));
         toast('Το επιτόκιο αποθηκεύτηκε');
@@ -750,6 +781,58 @@ async function products() {
       }));
     }
     box.append(card);
+  }
+  return box;
+}
+
+// ---- the currencies and their rates
+async function fx() {
+  const r = await api('fx');
+  const box = h('div');
+  const hist = h('div');
+  async function show(code) {
+    const c = await api('fx/' + code + '?days=60');
+    hist.replaceChildren(h('h3', null, c.name + ' (' + c.code + '): οι τελευταίες ισοτιμίες'),
+      table(['Ημέρα', '#1 ' + r.base + ' ='], c.rates.map((x) => h('tr', null, td(date(x.day)), tdn(num(x.mid, 4))))));
+  }
+  box.append(h('div', { class: 'card' }, h('h2', null, 'Νομίσματα και ισοτιμίες'),
+    h('p', { class: 'muted' }, 'Βασικό νόμισμα της τράπεζας: ' + r.base + '. Κάθε γραμμή γράφεται και σε αυτό, με την ισοτιμία της ημέρας της. '
+      + 'Μια μετατροπή γίνεται με τη μέση τιμή· ο πελάτης παίρνει λιγότερο κατά το περιθώριο κάθε νομίσματος.'),
+    table(['Κωδ.', 'Νόμισμα', '#Δεκαδικά', '#Περιθώριο %', '#1 ' + r.base + ' =', 'Από', 'Ενεργό'],
+      r.currencies.map((c) => h('tr', { class: c.code === r.base ? null : 'click', onclick: () => c.code !== r.base && show(c.code) },
+        td(c.code, 'mono'), td(c.name), tdn(c.decimals), tdn(num(c.spread_pct, 3)), tdn(num(c.mid, 4)), td(date(c.rate_day)),
+        td(c.active === 'Y' ? 'Ναι' : h('span', { class: 'badge no' }, 'Όχι'))))),
+    hist));
+  const codes = Object.fromEntries(r.currencies.filter((c) => c.active === 'Y').map((c) => [c.code, c.code + ' · ' + c.name]));
+  const out = h('p', { class: 'muted' });
+  box.append(h('div', { class: 'card' }, h('h2', null, 'Μετατροπή'), form([
+    field('Ποσό', h('input', { name: 'amount', 'data-num': 1, inputmode: 'decimal', required: true, value: '100' })),
+    field('Από', sel('from', codes, r.base)), field('Σε', sel('to', codes, 'USD'))], async (f) => {
+    const v = values(f);
+    const x = await api('fx/convert?amount=' + v.amount + '&from=' + v.from + '&to=' + v.to);
+    out.replaceChildren(h('b', null, amt(x.amount, x.from_) + ' = ' + amt(x.mid, x.to_)), ' (μέση τιμή) · ο πελάτης παίρνει ',
+      h('b', null, amt(x.customer, x.to_)));
+  }, 'Μετατροπή'), out));
+  if (can('MANAGER')) {
+    box.append(h('div', { class: 'card' }, h('h2', null, 'Νέα ισοτιμία'), form([
+      field('Νόμισμα', sel('code', Object.fromEntries(Object.entries(codes).filter(([k]) => k !== r.base)))),
+      field('Από', h('input', { name: 'day', type: 'date', value: S.day.open_day })),
+      field('1 ' + r.base + ' =', h('input', { name: 'mid', 'data-num': 1, inputmode: 'decimal', required: true }))], async (f) => {
+      const v = values(f);
+      await api('fx/' + v.code + '/rates', { day: v.day, mid: v.mid });
+      toast('Η ισοτιμία του ' + v.code + ' αποθηκεύτηκε');
+      route();
+    }, 'Αποθήκευση')),
+    h('div', { class: 'card' }, h('h2', null, 'Νόμισμα (νέο ή αλλαγή)'), form([
+      field('Κωδικός (ISO)', h('input', { name: 'code', required: true, maxlength: 3 })),
+      field('Όνομα', h('input', { name: 'name', required: true })),
+      field('Δεκαδικά', h('input', { name: 'decimals', 'data-num': 1, value: '2' })),
+      field('Περιθώριο %', h('input', { name: 'spread_pct', 'data-num': 1, value: '0.5', inputmode: 'decimal' })),
+      field('Ενεργό', sel('active', { Y: 'Ναι', N: 'Όχι' }))], async (f) => {
+      await api('fx', values(f));
+      toast('Το νόμισμα αποθηκεύτηκε');
+      route();
+    }, 'Αποθήκευση')));
   }
   return box;
 }

@@ -28,13 +28,36 @@ select 'EUR', 'Ευρώ', 2, 0 from dual where not exists (select 1 from bk_curr
 commit;
 
 -- the rates of the currencies: MID, how many of it one of the base currency buys (as the ECB: 1 EUR = 1,08 USD),
--- from its day on (the latest day before or on a day is the rate of that day); none of the base currency (1)
+-- from its day on (the latest day before or on a day is the rate of that day); none of the base currency (1).
+-- A heap table: a block of the forms reads its rows by their ROWID (the first one of PR 17 was organized by its
+-- index: its rows kept, the table made again)
+declare
+  t varchar2(10);
+begin
+  select max(iot_type) into t from user_tables where table_name = 'BK_FX_RATE';
+  if t = 'IOT' then
+    execute immediate 'create table bk_fx_keep as select currency, day, mid from bk_fx_rate';
+    execute immediate 'drop table bk_fx_rate purge';
+  end if;
+end;
+/
 create table if not exists bk_fx_rate (
   currency    varchar2(3)   not null constraint bk_fx_rate_currency_fk references bk_currency,
   day         date          not null,
   mid         number(18,8)  not null constraint bk_fx_rate_mid_ck check (mid > 0),
   constraint bk_fx_rate_pk primary key (currency, day)
-) organization index;
+);
+declare
+  n number;
+begin
+  select count(*) into n from user_tables where table_name = 'BK_FX_KEEP';
+  if n > 0 then
+    execute immediate 'insert into bk_fx_rate (currency, day, mid) select currency, day, mid from bk_fx_keep';
+    execute immediate 'drop table bk_fx_keep purge';
+    commit;
+  end if;
+end;
+/
 
 -- the customers: a person (or a company) with its tax number (AFM, its check digit right)
 create table if not exists bk_customer (
@@ -592,6 +615,14 @@ select k.account_id id, k.account_id, a.iban, p.code product, p.name product_nam
        (select c.name from bk_holder h, bk_customer c where h.account_id = a.id and h.role = 'P' and c.id = h.customer_id) holder
 from bk_ccard k, bk_account a, bk_product p
 where a.id = k.account_id and p.id = a.product_id;
+
+-- the currencies with their last rate and its day (ID: a number of the code, for the forms; BK_CURRENCY keeps its key)
+create or replace view bk_currency_v as
+select ora_hash(c.code) id, c.code, c.name, c.decimals, c.spread_pct, c.active,
+       case when c.code = (select nvl(max(value), 'EUR') from bk_setting where name = 'BASE_CURRENCY') then 1
+            else (select max(r.mid) keep (dense_rank last order by r.day) from bk_fx_rate r where r.currency = c.code) end mid,
+       (select max(r.day) from bk_fx_rate r where r.currency = c.code) rate_day
+from bk_currency c;
 
 -- the statements of the cards, with their days as text too (DD/MM/YYYY: the parameters of the report)
 create or replace view bk_cc_statement_v as
