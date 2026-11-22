@@ -6,7 +6,7 @@ const S = { token: null, me: null, day: null };
 const OPS = { DEP: 'Κατάθεση', WDR: 'Ανάληψη', TRO: 'Μεταφορά προς άλλον', TRI: 'Μεταφορά από άλλον',
   OUT: 'Σε άλλη τράπεζα', INC: 'Από άλλη τράπεζα', FEE: 'Προμήθεια' };
 const KINDS = { DEP: 'Κατάθεση', WDR: 'Ανάληψη', TRF: 'Μεταφορά', OUT: 'Σε άλλη τράπεζα', INC: 'Από άλλη τράπεζα',
-  INT: 'Τόκοι', REV: 'Αντιλογισμός' };
+  INT: 'Τόκοι', REV: 'Αντιλογισμός', PUR: 'Αγορά με κάρτα', FEE: 'Προμήθεια' };
 const CHANNELS = { '*': 'Όλα', BR: 'Γκισέ', WEB: 'e-banking', ATM: 'ATM', SYS: 'Τράπεζα' };
 const STATUS = { O: 'Ανοιχτός', B: 'Δεσμευμένος', C: 'Κλειστός' };
 const ROLES = ['TELLER', 'MANAGER', 'ADMIN'];

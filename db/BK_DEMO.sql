@@ -6,7 +6,9 @@
 -- movements: no deposit or withdrawal from the e-banking, the ATM up to 600 € a day, a fee for a transfer to
 -- another bank at the counter and for the 4th withdrawal of the month at the counter on, the savings without
 -- transfers to another bank and up to 4 withdrawals a month, the savings plus with 100 € left in them always,
--- a lower ATM limit for a few accounts; a movement out of its rules is not done. Run by
+-- a lower ATM limit for a few accounts; a movement out of its rules is not done. 12 credit cards (Classic, Gold):
+-- purchases, a hotel held and released now and then, a statement a month, paid from the current account of the
+-- customer a couple of days before it is due (in full, the minimum, or a part), or not at all: the fee. Run by
 -- INSTALL.sql demo; once: a database with entries already is left as it is.
 set serveroutput on
 declare
@@ -30,6 +32,11 @@ declare
   acc t_num;          -- every account
   salary t_num;       -- by account: the salary that comes in every month (0: none)
   rent t_num;         -- by account: a rent paid every month (0: none)
+  curacc t_num;       -- by customer: its current account
+  cca t_num;          -- the credit cards: their account, their card, how they are paid (F in full, M the
+  cck t_num;          --   minimum, P a part, 0 F, 1 M, 2 P)
+  ccpay t_num;
+  ccx number;
   n number;
   e number;
   d date;
@@ -80,7 +87,7 @@ declare
   -- a movement out of the rules of its account (or without the money for its fee): not done
   procedure refused is
   begin
-    if sqlcode not between -20132 and -20118 then
+    if sqlcode not between -20132 and -20118 and sqlcode <> -20147 then
       raise_application_error(-20000, sqlerrm);
     end if;
   end;
@@ -114,6 +121,7 @@ begin
   for i in 1 .. 40 loop
     k := k + 1;
     acc(k) := bk_core.open_account('CUR', cust(i), case when mod(i, 3) = 0 then 1000 * trunc(dbms_random.value(1, 4)) else 0 end);
+    curacc(i) := acc(k);
     salary(k) := case when mod(i, 5) <> 4 then money(850, 2600) else 0 end;
     rent(k) := case when mod(i, 4) = 1 then money(250, 650) else 0 end;
     if mod(i, 2) = 1 then
@@ -139,6 +147,16 @@ begin
   -- the debit cards: one for each current account, of its primary holder; their PIN given at the counter
   for x in (select a.id from bk_account a join bk_product p on p.id = a.product_id where p.kind = 'CUR' order by a.id) loop
     n := bk_core.new_card(x.id);
+  end loop;
+
+  -- the credit cards: every third customer, Gold every 4th of them; their statement on a day of their own
+  for j in 1 .. 12 loop
+    cca(j) := bk_core.cc_open(case when mod(j, 4) = 0 then 'GOLD' else 'VISA' end, cust(j * 3),
+                              case when mod(j, 4) = 0 then 1000 * trunc(dbms_random.value(5, 11))
+                                   else 500 * trunc(dbms_random.value(2, 9)) end,
+                              1 + mod(j * 5, 28));
+    cck(j) := bk_core.new_card(cca(j));
+    ccpay(j) := mod(j, 3);
   end loop;
 
   -- the rules of the movements: of the bank, of the products, of a few accounts
@@ -231,6 +249,39 @@ begin
         end if;
       end if;
     end loop;
+    -- the credit cards: purchases; a hotel held, released a few days on (CC_HOLD_DAYS); the statements due in 2
+    -- days paid (from the current account, as much as it has)
+    for j in 1 .. cca.count loop
+      if dbms_random.value < 0.08 then
+        begin
+          e := bk_core.cc_purchase(cck(j), money(8, 250),
+                 case trunc(dbms_random.value(0, 6)) when 0 then 'σούπερ μάρκετ' when 1 then 'καύσιμα'
+                   when 2 then 'ηλεκτρονικό κατάστημα' when 3 then 'εστιατόριο' when 4 then 'ρούχα' else 'αεροπορικά' end);
+        exception when others then refused;
+        end;
+      end if;
+      if dbms_random.value < 0.01 then
+        begin
+          n := bk_core.cc_authorize(cck(j), money(100, 400), 'ξενοδοχείο (εγγύηση)');
+        exception when others then refused;
+        end;
+      end if;
+      for s in (select closing, min_due from bk_cc_statement where account_id = cca(j) and due_date = d + 2 and closing > 0) loop
+        -- one of the third ones forgets now and then
+        if not (ccpay(j) = 2 and dbms_random.value < 0.25) then
+          amt := case ccpay(j) when 0 then s.closing when 1 then s.min_due
+                                else round(dbms_random.value(s.min_due, s.closing), 2) end;
+          ccx := available(curacc(j * 3));
+          amt := least(amt, trunc(ccx * 100) / 100);
+          if amt > 0 then
+            begin
+              e := bk_core.cc_pay(cca(j), curacc(j * 3), amt, 'WEB');
+            exception when others then refused;
+            end;
+          end if;
+        end if;
+      end loop;
+    end loop;
     -- a few reversals: a card payment booked twice by mistake
     if mod(d - first_day, 61) = 30 then
       a := acc(trunc(dbms_random.value(1, acc.count + 1)));
@@ -248,8 +299,8 @@ begin
   end loop;
   commit;
   select count(*) into n from bk_entry;
-  dbms_output.put_line('== demo: ' || cust.count || ' customers, ' || acc.count || ' accounts, ' || n || ' entries, '
-                       || (last_day_ - first_day + 1) || ' days closed');
+  dbms_output.put_line('== demo: ' || cust.count || ' customers, ' || acc.count || ' accounts, ' || cca.count
+                       || ' credit cards, ' || n || ' entries, ' || (last_day_ - first_day + 1) || ' days closed');
 end;
 /
 set serveroutput off

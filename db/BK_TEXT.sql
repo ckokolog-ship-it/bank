@@ -110,6 +110,7 @@ create or replace package body bk_text as
       when 'T70CE7810' then 'Τόκοι ως χθες'
       when 'T70FAEA29' then 'Πρώτα ένας λογαριασμός στην οθόνη'
       when 'T71DE0B14' then 'Κλιμάκιο από'
+      when 'T7254AE37' then 'Αγορά με κάρτα'
       when 'T73249983' then 'Έως'
       when 'T73943EDD' then 'IBAN άλλης τράπεζας'
       when 'T780CDCB1' then 'Λάθη'

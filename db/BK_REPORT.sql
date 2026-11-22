@@ -45,7 +45,8 @@ create or replace package body bk_report as
     return case when p_op = 'FEE' then 'Προμήθεια'
                 else case p_kind when 'DEP' then 'Κατάθεση' when 'WDR' then 'Ανάληψη' when 'TRF' then 'Μεταφορά'
                                  when 'OUT' then 'Σε άλλη τράπεζα' when 'INC' then 'Από άλλη τράπεζα'
-                                 when 'INT' then 'Τόκοι' when 'REV' then 'Αντιλογισμός' else p_kind end end;
+                                 when 'INT' then 'Τόκοι' when 'REV' then 'Αντιλογισμός' when 'PUR' then 'Αγορά με κάρτα'
+                                 when 'FEE' then 'Προμήθεια' else p_kind end end;
   end;
 
   function report_rows(p_kind varchar2, p_account_id number, p_from date, p_to date) return t_rrows pipelined is

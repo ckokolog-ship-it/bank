@@ -742,6 +742,8 @@ PACKAGE BODY ui IS
         t := 'Τόκοι';
       ELSIF k = 'REV' THEN
         t := 'Αντιλογισμός';
+      ELSIF k = 'PUR' THEN
+        t := 'Αγορά με κάρτα';
       ELSE
         t := k;
       END IF;

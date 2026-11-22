@@ -8,7 +8,9 @@ select v.code, v.name, v.kind from (values
   ('INT_EXP', 'Τόκοι καταθέσεων (έξοδο)',                'E'),
   ('INT_INC', 'Τόκοι υπερανάληψης (έσοδο)',              'I'),
   ('TAX',     'Φόρος τόκων προς απόδοση',                'L'),
-  ('FEE',     'Προμήθειες (έσοδο)',                      'I')
+  ('FEE',     'Προμήθειες (έσοδο)',                      'I'),
+  ('CC_MERCH', 'Αγορές με πιστωτικές κάρτες (προς εκκαθάριση)', 'L'),
+  ('CC_INT',  'Τόκοι πιστωτικών καρτών (έσοδο)',         'I')
 ) v (code, name, kind)
 where not exists (select 1 from bk_gl g where g.code = v.code);
 
@@ -17,7 +19,8 @@ select v.name, v.value from (values
   ('BANK_CODE', '999'),           -- (no real bank: 999)
   ('BRANCH_CODE', '0001'),
   ('ATM_NOTES', '20,50'),         -- the notes the ATMs give (€)
-  ('ATM_MAX_NOTES', '40')         -- the most notes of one withdrawal
+  ('ATM_MAX_NOTES', '40'),        -- the most notes of one withdrawal
+  ('CC_HOLD_DAYS', '7')           -- an authorization of a credit card not posted in so many days: released
 ) v (name, value)
 where not exists (select 1 from bk_setting s where s.name = v.name);
 
@@ -29,6 +32,21 @@ select v.code, v.name, v.kind, v.day_basis, v.cap_every, v.tax_rate, v.od_rate f
   ('SAVP', 'Ταμιευτήριο Plus',              'SAV', 'ACT360', 'M', 15, 0)
 ) v (code, name, kind, day_basis, cap_every, tax_rate, od_rate)
 where not exists (select 1 from bk_product p where p.code = v.code);
+
+-- the credit cards: their products and terms (BK_CC_PRODUCT)
+insert into bk_product (code, name, kind, day_basis, cap_every, tax_rate, od_rate)
+select v.code, v.name, 'CC', 'ACT365', 'M', 0, 0 from (values
+  ('VISA', 'Πιστωτική κάρτα Classic'),
+  ('GOLD', 'Πιστωτική κάρτα Gold')
+) v (code, name)
+where not exists (select 1 from bk_product p where p.code = v.code);
+insert into bk_cc_product (product_id, rate, min_pct, min_amount, due_days, late_fee)
+select p.id, v.rate, v.min_pct, v.min_amount, v.due_days, v.late_fee from (values
+  ('VISA', 16.50, 3, 20, 25, 10),
+  ('GOLD', 13.90, 2.5, 30, 25, 15)
+) v (code, rate, min_pct, min_amount, due_days, late_fee)
+join bk_product p on p.code = v.code
+where not exists (select 1 from bk_cc_product c where c.product_id = p.id);
 
 -- the rates (% a year) from the start; a product with rates of its own already: as it is
 insert into bk_rate (product_id, valid_from, min_balance, rate)
