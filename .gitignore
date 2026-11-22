@@ -3,3 +3,11 @@ __pycache__/
 target/
 *.log
 .env
+
+# the forms: built on forms1 (build_forms.sh), never in the repo
+*.fmb
+*.fmx
+*.mmb
+*.mmx
+*.err
+__pycache__/

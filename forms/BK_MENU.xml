@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Module version="141200000" xmlns="http://xmlns.oracle.com/Forms">
+  <MenuModule Name="BK_MENU" MainMenu="MAIN_MENU">
+    <Menu Name="MAIN_MENU">
+      <MenuItem Name="FILE" Label="Archeio" CommandType="Menu" SubMenuName="FILE_MENU"/>
+      <MenuItem Name="REC" Label="Eggrafes" CommandType="Menu" SubMenuName="REC_MENU"/>
+      <MenuItem Name="BANK" Label="Trapeza" CommandType="Menu" SubMenuName="BANK_MENU"/>
+    </Menu>
+    <Menu Name="FILE_MENU">
+      <MenuItem Name="MAIN" Label="Archiko menoy" CommandType="PL/SQL" MenuItemCode="new_form('BK_MAIN');"/>
+      <MenuItem Name="LOGOUT" Label="Aposyndesi" CommandType="PL/SQL" MenuItemCode="BEGIN bk_auth.logout(NAME_IN('GLOBAL.BK_TOKEN')); EXCEPTION WHEN OTHERS THEN NULL; END; COPY('', 'GLOBAL.BK_TOKEN'); NEW_FORM('BK_LOGIN');"/>
+      <MenuItem Name="EXIT" Label="Exodos" CommandType="PL/SQL" MenuItemCode="do_key('EXIT_FORM');"/>
+    </Menu>
+    <Menu Name="REC_MENU">
+      <MenuItem Name="SAVE" Label="Apothikeysi (F10)" CommandType="PL/SQL" MenuItemCode="do_key('COMMIT_FORM');"/>
+      <MenuItem Name="ENTERQ" Label="Anazitisi (F7)" CommandType="PL/SQL" MenuItemCode="do_key('ENTER_QUERY');"/>
+      <MenuItem Name="EXECQ" Label="Ektelesi anazitisis (F8)" CommandType="PL/SQL" MenuItemCode="do_key('EXECUTE_QUERY');"/>
+      <MenuItem Name="LOV" Label="Lista timon (Ctrl+L)" CommandType="PL/SQL" MenuItemCode="do_key('LIST_VALUES');"/>
+    </Menu>
+    <Menu Name="BANK_MENU">
+      <MenuItem Name="CUSTOMERS" Label="Pelates" CommandType="PL/SQL" MenuItemCode="new_form('BK_CUSTOMERS');"/>
+      <MenuItem Name="ACCOUNTS" Label="Logariasmoi" CommandType="PL/SQL" MenuItemCode="new_form('BK_ACCOUNTS');"/>
+      <MenuItem Name="MOVE" Label="Kinisi" CommandType="PL/SQL" MenuItemCode="new_form('BK_MOVE');"/>
+      <MenuItem Name="DAY" Label="Imera kai kleisimo" CommandType="PL/SQL" MenuItemCode="new_form('BK_DAY');"/>
+    </Menu>
+  </MenuModule>
+</Module>
