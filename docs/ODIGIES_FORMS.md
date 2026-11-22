@@ -38,6 +38,8 @@ java -jar C:\forms\frmsal.jar -url "http://forms1.home.lan:9001/forms/frmservlet
 
 Η σύνδεση γίνεται με τους **ίδιους χρήστες με τις σελίδες** (`install_service.sh --add-user`, ή η σελίδα «Χρήστες»).
 
+**Το `NLS_LANG` του XML2Forms:** με `AL32UTF8` δεν ξεκινά, και βγάζει το ίδιο μήνυμα, `Failed to create new forms context` (το βρήκαν και οι φόρμες του ΛΟΤΤΟ). Γι' αυτό το `build_forms.sh` του δίνει `AMERICAN_AMERICA.WE8ISO8859P1`, ό,τι κι αν λέει το profile του `oracle`. Οι φόρμες είναι ASCII, και τα ελληνικά τους είναι στο `BK_TEXT`. Το script γράφει στην αρχή ποιο `NLS_LANG` χρησιμοποιεί.
+
 **Γιατί το Xvfb:**
 - το XML2Forms σταματά με `Error initialising the Forms Jdapi: _jni_initialize: Failed to create new forms context` όταν δεν έχει οθόνη X·
 - με το Xvfb, το `build_forms.sh` χρησιμοποιεί εικονική οθόνη (`xvfb-run`), οπότε τρέχει και από `sudo -iu oracle`, χωρίς MobaXterm.
