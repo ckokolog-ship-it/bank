@@ -26,8 +26,9 @@ sudo -iu oracle bash -c 'cd ~/bank/db && export NLS_LANG=GREEK_GREECE.AL32UTF8 &
 sudo -iu oracle ~oracle/bank/forms/bk_wallet.sh
 sudo systemctl restart weblogic-forms
 
-# 4. οι φόρμες: XML -> .fmb -> .fmx, στον φάκελο FORMS_PATH
-sudo -iu oracle ~oracle/bank/forms/build_forms.sh
+# 4. οι φόρμες: XML -> .fmb -> .fmx, στον φάκελο FORMS_PATH: σε session κατευθείαν ως oracle (MobaXterm με X11-forwarding)
+su - oracle
+~/bank/forms/build_forms.sh
 ```
 
 Μετά, από το PC σου (FSAL, όπως το mini market):
@@ -38,19 +39,13 @@ java -jar C:\forms\frmsal.jar -url "http://forms1.home.lan:9001/forms/frmservlet
 
 Η σύνδεση γίνεται με τους **ίδιους χρήστες με τις σελίδες** (`install_service.sh --add-user`, ή η σελίδα «Χρήστες»).
 
-**Το `NLS_LANG` του XML2Forms:** με `AL32UTF8` δεν ξεκινά, και βγάζει το ίδιο μήνυμα, `Failed to create new forms context` (το βρήκαν και οι φόρμες του ΛΟΤΤΟ). Γι' αυτό το `build_forms.sh` του δίνει `AMERICAN_AMERICA.WE8ISO8859P1`, ό,τι κι αν λέει το profile του `oracle`. Οι φόρμες είναι ASCII, και τα ελληνικά τους είναι στο `BK_TEXT`. Το script γράφει στην αρχή ποιο `NLS_LANG` χρησιμοποιεί.
+**Η οθόνη του XML2Forms.** Το XML2Forms (το Forms Jdapi) θέλει οθόνη X, αλλιώς γράφει `Error initialising the Forms Jdapi: _jni_initialize: Failed to create new forms context`. Στο forms1 δουλεύει:
+- **σε session κατευθείαν ως `oracle`** (`su - oracle`, ή νέο session του MobaXterm ως `oracle`), με X11-forwarding. Το `echo $DISPLAY` δείχνει π.χ. `localhost:10.0`. Αυτό δοκιμάστηκε στο forms1 και δούλεψε, και το `build_forms.sh` το προτιμά·
+- **όχι μέσα από `sudo -iu oracle`.** Εκεί το `DISPLAY` περνά, αλλά το «κλειδί» του X είναι του `chris`. Το ίδιο παθαίνει και το `build_forms.sh` του mini market.
+- **χωρίς οθόνη με κλειδί:** δοκιμάζει εικονική οθόνη (`xvfb-run`, 24 bit χρώμα), αν υπάρχει το `xorg-x11-server-Xvfb`·
+- **για να επιβάλεις τη μία ή την άλλη:** `XML_DISPLAY=session` ή `XML_DISPLAY=xvfb`.
 
-**Γιατί το Xvfb:**
-- το XML2Forms σταματά με `Error initialising the Forms Jdapi: _jni_initialize: Failed to create new forms context` όταν δεν έχει οθόνη X·
-- με το Xvfb, το `build_forms.sh` χρησιμοποιεί εικονική οθόνη (`xvfb-run`), οπότε τρέχει και από `sudo -iu oracle`, χωρίς MobaXterm.
-
-**Χωρίς Xvfb**, το X11-forwarding του MobaXterm δουλεύει μόνο σε session **κατευθείαν ως `oracle`**. Μέσω `sudo` το `DISPLAY` περνά, αλλά το «κλειδί» του X ανήκει στον `chris`, και φαίνεται το `MoTTY X11 proxy: No authorisation provided`. Τότε, πριν από το `build_forms.sh`, ως `chris`:
-
-```bash
-xauth extract - $DISPLAY | sudo -iu oracle xauth merge -
-```
-
-Το script το εντοπίζει και γράφει ποια από τις δύο λύσεις χρειάζεται.
+Το `NLS_LANG` του profile (`AMERICAN_GREECE.EL8ISO8859P7`) κάνει. Με `AL32UTF8` το XML2Forms δεν ξεκινά (το βρήκαν οι φόρμες του ΛΟΤΤΟ), οπότε τότε το script παίρνει `AMERICAN_AMERICA.WE8ISO8859P1`. Στην αρχή γράφει ποια οθόνη και ποιο `NLS_LANG` χρησιμοποιεί.
 
 **Μετά από ένα νέο PR:**
 1. `git pull`·
