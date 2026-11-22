@@ -417,15 +417,16 @@ async function interestTab(a) {
   const p = period(async (from, to) => {
     const r = await api('accounts/' + a.id + '/interest?from=' + from + '&to=' + to);
     list.replaceChildren(
-      h('p', { class: 'muted' }, 'Τόκος μιας μέρας = υπόλοιπο (ανά ημερομηνία αξίας) × επιτόκιο / 100 × ημέρες / ημέρες του έτους. '
-        + 'Σύνολο της περιόδου: ', h('b', null, num(r.total, 6) + ' €')),
+      h('p', { class: 'muted' }, 'Ο τόκος μετριέται ανά διάστημα: σε ένα διάστημα το υπόλοιπο (ανά ημερομηνία αξίας) και το επιτόκιο μένουν ίδια. '
+        + 'Τόκος = ημέρες × (υπόλοιπο × επιτόκιο / 100 / ημέρες του έτους, στρογγυλεμένο σε 6 δεκαδικά): ό,τι και μέρα προς μέρα. '
+        + 'Σύνολο των διαστημάτων: ', h('b', null, num(r.total, 6) + ' €')),
       h('h3', null, 'Κεφαλαιοποιήσεις'),
       table(['Ημέρα', '#Μικτός τόκος', '#Φόρος', '#Καθαρός', 'Εγγραφή'], r.capitalized.map((x) => h('tr', null,
         td(date(x.day)), tdn(eur(x.gross)), tdn(eur(x.tax)), tdn(eur(x.net)),
         td(x.entry_id ? h('a', { href: '#/entry/' + x.entry_id }, '#' + x.entry_id) : '—')))));
-    list.append(h('h3', null, 'Κάθε μέρα'), table(['Ημέρα', '#Υπόλοιπο', '#Επιτόκιο %', '#Ημέρες', '#Έτος', '#Τόκος'],
-      r.days.slice().reverse().map((x) => h('tr', null, td(date(x.day)), tdn(eur(x.balance)), tdn(num(x.rate)),
-        tdn(x.days), tdn(x.year_days), h('td', { class: 'num' + (x.interest < 0 ? ' bad' : '') }, num(x.interest, 6))))));
+    list.append(h('h3', null, 'Τα διαστήματα'), table(['Από', 'Έως', '#Υπόλοιπο', '#Επιτόκιο %', '#Ημέρες', '#Έτος', '#Τόκος'],
+      r.stretches.slice().reverse().map((x) => h('tr', null, td(date(x.day_from)), td(date(x.day_to)), tdn(eur(x.balance)),
+        tdn(num(x.rate)), tdn(x.days), tdn(x.year_days), h('td', { class: 'num' + (x.interest < 0 ? ' bad' : '') }, num(x.interest, 6))))));
   }, 90);
   out.append(p.el, list);
   await p.run();

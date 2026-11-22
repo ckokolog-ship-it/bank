@@ -226,16 +226,30 @@ def test_the_interest_of_each_day(db):
     db.fn('deposit', int, a, 500, 'Test αύριο', d0 + datetime.timedelta(days=1))      # (counts from tomorrow)
     db.conn.commit()
     close_days(db, 2)
-    db.cur.execute('select day, balance, rate, days, year_days, interest from bk_accrual where account_id = :a order by day', a=a)
+    # a day as any other: no interest counted at its close (the end of a period, or when it is needed)
+    assert db.one('select count(*) from bk_accrual where account_id = :a', a=a)[0] == 0 or d0.day >= 27
+    db.proc('accrue', a)
+    db.conn.commit()
+    # two stretches: the balance by value date changed on the 2nd day
+    db.cur.execute('select day_from, day_to, balance, rate, days, year_days, interest from bk_accrual '
+                   'where account_id = :a order by day_from', a=a)
     rows = [tuple(r) for r in db.cur]
-    assert [(r[1], r[2], r[3], r[4]) for r in rows] == [(1000, 3, 1, 365), (1500, 3, 1, 365)]
-    assert [float(r[5]) for r in rows] == [round(1000 * 0.03 / 365, 6), round(1500 * 0.03 / 365, 6)]
-    # a tier: 10.000 and more at 4 %, all of it
+    assert [(r[0], r[1]) for r in rows] == [(d0, d0), (d0 + datetime.timedelta(days=1),) * 2]
+    assert [(r[2], r[3], r[4], r[5]) for r in rows] == [(1000, 3, 1, 365), (1500, 3, 1, 365)]
+    assert [float(r[6]) for r in rows] == [round(1000 * 0.03 / 365, 6), round(1500 * 0.03 / 365, 6)]
+    db.proc('accrue', a)                                     # again: nothing more
+    assert db.one('select count(*) from bk_accrual where account_id = :a', a=a)[0] == 2
+    # a tier: 10.000 and more at 4 %, all of it; 3 days of it: 3 x the interest of a day (each rounded)
     db.fn('deposit', int, a, 9000)
     db.conn.commit()
-    close_days(db, 1)
-    r = db.one('select balance, rate, interest from bk_accrual where account_id = :a and day = (select max(day) from bk_accrual where account_id = :a)', a=a)
-    assert (float(r[0]), float(r[1]), float(r[2])) == (10500, 4, round(10500 * 0.04 / 365, 6))
+    close_days(db, 3)
+    db.proc('accrue', a)
+    db.conn.commit()
+    r = db.one('select balance, rate, days, interest from bk_accrual where account_id = :a and day_from = '
+               '(select max(day_from) from bk_accrual where account_id = :a)', a=a)
+    assert (float(r[0]), float(r[1]), r[2], float(r[3])) == (10500, 4, 3, round(3 * round(10500 * 0.04 / 365, 6), 6))
+    assert float(db.fn('interest_by_day', float, a, d0, d0 + datetime.timedelta(days=4))) == \
+        float(db.one('select sum(interest) from bk_accrual where account_id = :a', a=a)[0])
     acc = float(db.one('select accrued from bk_account where id = :a', a=a)[0])
     assert acc == round(sum(float(x) for x, in db.cur.execute('select interest from bk_accrual where account_id = :a', a=a)), 6)
     db.check()
@@ -267,9 +281,11 @@ def test_an_overdraft_pays_interest(db):
     db.fn('withdraw', int, a, 730)
     db.conn.commit()
     close_days(db, 3)
-    db.cur.execute('select balance, rate, interest from bk_accrual where account_id = :a order by day', a=a)
+    db.proc('accrue', a)
+    db.conn.commit()
+    db.cur.execute('select balance, rate, days, interest from bk_accrual where account_id = :a order by day_from', a=a)
     rows = [tuple(float(x) for x in r) for r in db.cur]
-    assert rows == [(-730, 10, round(-730 * 0.10 / 365, 6))] * 3
+    assert rows == [(-730, 10, 3, round(3 * round(-730 * 0.10 / 365, 6), 6))]
     # closed: its balance 0 after its debit interest (capitalized at the close, to INT_INC); before: refused
     db.fails(125, 'close_account', a, rtype=None)
     db.fn('deposit', int, a, 730)
@@ -298,12 +314,26 @@ def test_the_close_of_a_day(db):
     db.fails(102, 'set_start', d, rtype=None)                                  # (entries there)
     close_days(db, 1)
     assert db.day() == d + datetime.timedelta(days=1)
-    # every open account a row of the day; a closed one none
-    n_open = db.one("select count(*) from bk_account where status <> 'C' and opened_on <= :d", d=d)[0]
-    assert db.one('select count(*) from bk_accrual where day = :d', d=d)[0] == n_open
-    # 30/360: the 31st counts 0, the end of February 30 days in all
-    for day, days in db.cur.execute("select a.day, a.days from bk_accrual a join bk_account x on x.id = a.account_id "
-                                    "join bk_product p on p.id = x.product_id where p.day_basis = '30360' "
-                                    "and (to_char(a.day, 'DD') = '31' or (to_char(a.day, 'MM') = '02' and a.day = last_day(a.day)))").fetchall():
-        assert days == (0 if day.day == 31 else 30 - day.day + 1)
+    # 30/360: the 31st counts 0, the end of February 30 days in all (the calendar of the stretches)
+    for day, d30 in db.cur.execute("select day, d30 from bk_calendar where to_char(day, 'DD') = '31' "
+                                   "or (to_char(day, 'MM') = '02' and day = last_day(day))").fetchall():
+        assert d30 == (0 if day.day == 31 else 30 - day.day + 1)
+    a = db.one('select min(id) from bk_account')[0]
+    db.fails(124, 'accrue', a, d + datetime.timedelta(days=1), rtype=None)      # (a day not closed)
+    db.check()
+
+
+def test_the_stretches_as_day_by_day(db):
+    """every account (the demo: a year of them; 30/360 too, its 31sts and the end of February; a rate changed;
+    overdrafts; capitalized): its interest by stretches the same, to the last decimal, as day by day"""
+    ids = [r[0] for r in db.cur.execute("select id from bk_account where status <> 'C' order by id").fetchall()]
+    for a in ids:
+        db.proc('accrue', a)
+    db.conn.commit()
+    for a, opened, upto, total in db.cur.execute(
+            "select a.id, a.opened_on, a.accrued_to, nvl(sum(x.interest), 0) from bk_account a "
+            "left join bk_accrual x on x.account_id = a.id where a.accrued_to is not null "
+            "group by a.id, a.opened_on, a.accrued_to order by a.id").fetchall():
+        by_day = db.cur.connection.cursor().callfunc('bk_core.interest_by_day', float, [a, opened, upto])
+        assert round(by_day, 6) == round(float(total), 6), (a, by_day, total)
     db.check()
