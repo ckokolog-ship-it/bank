@@ -232,7 +232,7 @@ end;]]>
       <textSource>
       <![CDATA[function cf_periodformula return Char is
 begin
-  return bk_report.label('PERIOD') || ': ' || :P_FROM || ' - ' || :P_TO;
+  return bk_report.period(:P_KIND, :P_ACCOUNT, to_date(:P_FROM, 'DD/MM/YYYY'), to_date(:P_TO, 'DD/MM/YYYY'));
 end;]]>
       </textSource>
     </function>

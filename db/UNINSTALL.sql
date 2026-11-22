@@ -10,6 +10,7 @@ drop view if exists bk_account_v;
 drop view if exists bk_rule_v;
 drop view if exists bk_card_v;
 drop view if exists bk_ccard_v;
+drop view if exists bk_cc_statement_v;
 drop view if exists bk_customer_account_v;
 drop view if exists bk_statement_line;
 drop view if exists bk_limits;

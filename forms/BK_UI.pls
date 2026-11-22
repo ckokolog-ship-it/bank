@@ -1,5 +1,5 @@
 -- BK_UI.pls -- the package UI of the forms of the bank (BK_LOGIN, BK_MAIN, BK_CUSTOMERS, BK_ACCOUNTS, BK_MOVE,
--- BK_DAY, BK_RULES, BK_PRODUCTS, BK_CARDS, BK_ATMS, BK_USERS): mkforms.py puts it in each form. The triggers only call it:
+-- BK_DAY, BK_RULES, BK_PRODUCTS, BK_CARDS, BK_CCARDS, BK_ATMS, BK_USERS): mkforms.py puts it in each form. The triggers only call it:
 --   WHEN-NEW-FORM-INSTANCE   ui.init
 --   WHEN-NEW-RECORD-INSTANCE ui.master(:SYSTEM.TRIGGER_BLOCK)   (a master: its detail again)
 --   WHEN-BUTTON-PRESSED      ui.press(:SYSTEM.TRIGGER_ITEM)   (the toolbar: ui.tool)
@@ -551,6 +551,60 @@ PACKAGE BODY ui IS
       SELECT pan INTO tok FROM bk_card WHERE id = id_;
       copy(t || '   (' || tok || ')', 'CTL.C_PIN');
       message('Νέα κάρτα ' || tok || ': το PIN για τον κάτοχο, δεν φαίνεται ξανά');
+
+    -- BK_CCARDS: the credit card on the screen: its limit, a payment, a purchase, its statement printed
+    ELSIF p_item IN ('CTL.SETLIMIT', 'CTL.PAYCC', 'CTL.PAYCASH', 'CTL.BUY', 'CTL.PRINTSTMT') THEN
+      acc := num('CC.ID');
+      IF acc IS NULL THEN
+        fail('Πρώτα μια κάρτα στην οθόνη');
+      END IF;
+      IF p_item = 'CTL.PRINTSTMT' THEN
+        IF name_in('CST.STMT_TEXT') IS NULL THEN
+          fail('Πρώτα μια κίνηση από κάτω');
+        END IF;
+        open_report('BK_CC_STATEMENT', '&P_KIND=C&P_ACCOUNT=' || acc || '&P_FROM=' || name_in('CST.FROM_TEXT')
+                                       || '&P_TO=' || name_in('CST.STMT_TEXT'));
+      ELSE
+        IF p_item = 'CTL.SETLIMIT' THEN
+          bk_core.cc_set_limit(acc, num('CTL.L_LIMIT'));
+          copy('', 'CTL.L_LIMIT');
+          t := 'Το όριο της κάρτας άλλαξε';
+        ELSIF p_item = 'CTL.PAYCC' THEN
+          IF num('CTL.P_FROM_ID') IS NULL THEN
+            fail('Πρώτα ο λογαριασμός της πληρωμής (λίστα)');
+          END IF;
+          e := bk_core.cc_pay(acc, num('CTL.P_FROM_ID'), num('CTL.P_AMOUNT'));
+          copy('', 'CTL.P_AMOUNT');
+          t := 'Πληρωμή: εγγραφή #' || e;
+        ELSIF p_item = 'CTL.PAYCASH' THEN
+          e := bk_core.deposit(acc, num('CTL.P_AMOUNT'), 'Πληρωμή κάρτας μετρητοίς');
+          copy('', 'CTL.P_AMOUNT');
+          t := 'Πληρωμή μετρητοίς: εγγραφή #' || e;
+        ELSE
+          SELECT max(id) INTO id_ FROM bk_card WHERE account_id = acc AND status = 'A';
+          IF id_ IS NULL THEN
+            fail('Ο λογαριασμός δεν έχει ενεργή κάρτα');
+          END IF;
+          e := bk_core.cc_purchase(id_, num('CTL.Q_AMOUNT'), name_in('CTL.Q_MERCHANT'));
+          copy('', 'CTL.Q_AMOUNT');
+          t := 'Αγορά: εγγραφή #' || e;
+        END IF;
+        forms_ddl('COMMIT');
+        show_only(acc);
+        message(t);
+      END IF;
+    ELSIF p_item = 'CTL.NEWCC' THEN
+      IF num('CTL.N_CUST_ID') IS NULL THEN
+        fail('Πρώτα ο πελάτης (λίστα)');
+      END IF;
+      acc := bk_core.cc_open(name_in('CTL.N_PRODUCT'), num('CTL.N_CUST_ID'), num('CTL.N_LIMIT'), num('CTL.N_DAY'));
+      id_ := bk_core.new_card(acc);
+      t := bk_auth.new_pin(id_);
+      forms_ddl('COMMIT');
+      show_only(acc);
+      SELECT pan INTO tok FROM bk_card WHERE id = id_;
+      copy(t || '   (' || tok || ')', 'CTL.C_RESULT');
+      message('Νέα πιστωτική κάρτα ' || tok || ': το PIN για τον κάτοχο, δεν φαίνεται ξανά');
 
     -- BK_ATMS: a cassette of the ATM on the screen; the notes of all of them
     ELSIF p_item = 'CTL.FILL' THEN

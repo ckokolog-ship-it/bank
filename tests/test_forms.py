@@ -156,7 +156,7 @@ def test_xml_ascii_and_references(name):
                 assert m.get('ReturnItem') in items, m.get('ReturnItem')
     # every item of the package UI is an item of the form (NAME_IN, COPY of BLOCK.ITEM)
     body = BUILT[name][2]
-    for it in set(re.findall(r"'((?:CTL|CUST|CA|ACC|ST|LAST)\.[A-Z_0-9]+)'", body)):
+    for it in set(re.findall(r"'((?:CTL|CUST|CA|ACC|ST|LAST|CC|CST)\.[A-Z_0-9]+)'", body)):
         blk = it.split('.')[0]
         if blk in {b.get('Name') for b in root.iter('{%s}Block' % NS['f'])}:
             if it in items or it.startswith('CTL.'):
@@ -612,6 +612,48 @@ def test_the_reports_of_an_account(cur):
         assert 'Πρώτα' in fails(cur, "ui.press('CTL.PRINTST');", CTL__P_FROM='01/01/2026', CTL__P_TO='31/12/2026')
         assert 'διάστημα' in fails(cur, "ui.press('CTL.PRINTST');", ACC__ID=str(a), CTL__P_FROM='01/02/2026',
                                    CTL__P_TO='01/01/2026')
+    finally:
+        cur.execute("delete from bk_setting where name like 'REPORTS%'")
+        for n, v in old:
+            cur.execute('insert into bk_setting (name, value) values (:n, :v)', n=n, v=v)
+        cur.connection.commit()
+
+
+@needs_db
+def test_the_credit_cards(cur):
+    """a new card for a customer (its PIN once), a purchase, payments from an account and in cash, the limit, the
+    statement chosen printed (BK_CC_STATEMENT, its period)"""
+    compile_ui(cur, 'BK_CCARDS')
+    c = cur.callfunc('bk_core.new_customer', int, ['Test Φόρμες κάρτα %d' % random.randrange(10 ** 6), afm()])
+    cur.connection.commit()
+    assert 'Πρώτα ο πελάτης' in fails(cur, "ui.press('CTL.NEWCC');", CTL__N_PRODUCT='VISA', CTL__N_LIMIT='1000')
+    run(cur, "ui.press('CTL.NEWCC');", CTL__N_CUST_ID=str(c), CTL__N_PRODUCT='VISA', CTL__N_LIMIT='1000', CTL__N_DAY='12')
+    a, day = cur.execute("select k.account_id, k.stmt_day from bk_ccard k join bk_holder h on h.account_id = k.account_id "
+                         "where h.customer_id = :c", c=c).fetchone()
+    assert day == 12 and 'CC:id = %d;' % a in queries(cur)
+    assert re.match(r'^\d{4}   \(4\d{15}\)$', item(cur, 'CTL.C_RESULT')) and 'Νέα πιστωτική κάρτα' in msgs(cur)
+    run(cur, "ui.press('CTL.BUY');", CC__ID=str(a), CTL__Q_AMOUNT='200', CTL__Q_MERCHANT='Test βιβλιοπωλείο')
+    assert 'Αγορά: εγγραφή #' in msgs(cur) and item(cur, 'CTL.Q_AMOUNT') is None
+    p = new_account(cur, 500)
+    run(cur, "ui.press('CTL.PAYCC');", CC__ID=str(a), CTL__P_FROM_ID=str(p), CTL__P_AMOUNT='50')
+    run(cur, "ui.press('CTL.PAYCASH');", CC__ID=str(a), CTL__P_AMOUNT='20')
+    assert cur.execute('select balance from bk_account where id = :a', a=a).fetchone()[0] == -130
+    assert cur.execute('select balance from bk_account where id = :p', p=p).fetchone()[0] == 450
+    assert 'Πρώτα ο λογαριασμός' in fails(cur, "ui.press('CTL.PAYCC');", CC__ID=str(a), CTL__P_AMOUNT='5')
+    run(cur, "ui.press('CTL.SETLIMIT');", CC__ID=str(a), CTL__L_LIMIT='100')
+    assert cur.execute('select available from bk_ccard_v where id = :a', a=a).fetchone()[0] == -30
+    assert 'BK-147' in fails(cur, "ui.press('CTL.BUY');", CC__ID=str(a), CTL__Q_AMOUNT='1')
+    assert 'Πρώτα μια κάρτα' in fails(cur, "ui.press('CTL.BUY');", CTL__Q_AMOUNT='1')
+    # the statement chosen: its report, with its period
+    assert 'Πρώτα μια κίνηση' in fails(cur, "ui.press('CTL.PRINTSTMT');", CC__ID=str(a))
+    old = cur.execute("select name, value from bk_setting where name like 'REPORTS%'").fetchall()
+    try:
+        cur.execute("delete from bk_setting where name like 'REPORTS%'")
+        cur.execute("insert into bk_setting (name, value) values ('REPORTS_URL', 'http://x:9012/reports/rwservlet?bank')")
+        cur.connection.commit()
+        run(cur, "ui.press('CTL.PRINTSTMT');", CC__ID=str(a), CST__STMT_TEXT='12/11/2026', CST__FROM_TEXT='13/10/2026')
+        assert prop(cur, 'SHOW_DOCUMENT') == ('http://x:9012/reports/rwservlet?bank&report=BK_CC_STATEMENT.rdf&destype=cache'
+                                              '&desformat=PDF&P_KIND=C&P_ACCOUNT=%d&P_FROM=13/10/2026&P_TO=12/11/2026 _blank' % a)
     finally:
         cur.execute("delete from bk_setting where name like 'REPORTS%'")
         for n, v in old:

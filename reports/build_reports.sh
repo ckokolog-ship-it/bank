@@ -3,7 +3,7 @@
 # of the repo (mkreports.py) to the .rdf in the folder of the Reports Server (its sourceDir: /u01/app/oracle/reports),
 # with rwconverter.
 #
-#   ./build_reports.sh                          both
+#   ./build_reports.sh                          all of them
 #   ./build_reports.sh BK_STATEMENT             one
 #
 # The connection: /@BK_DB, the wallet of the domain (forms/bk_wallet.sh), no password; BK_REPORT in the database
@@ -14,7 +14,7 @@
 set -u
 cd "$(dirname "$0")" || exit 1
 HERE=$(pwd)
-REPORTS=${*:-BK_STATEMENT BK_INTEREST}
+REPORTS=${*:-BK_STATEMENT BK_INTEREST BK_CC_STATEMENT}
 USERID=${USERID:-/@BK_DB}
 D=${DOMAIN_HOME:-/u01/app/oracle/config/domains/forms_domain}
 MW=${MW_HOME:-/u01/app/oracle/middleware}

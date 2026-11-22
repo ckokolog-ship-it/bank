@@ -138,3 +138,42 @@ def test_the_words_of_the_reports(db):
             assert w and w != key and all(ord(c) < 128 or 'Ά' <= c <= 'ώ' or c in '×/ ' for c in w), (key, w)
     assert db.one("select bk_report.label('DEBIT', 'S'), bk_report.label('DEBIT', 'I') from dual") == \
         ('Χρέωση', 'Κεφαλαιοποίηση')
+
+
+@pytest.mark.skipif(not DSN, reason='BANK_DSN not set')
+def test_the_statement_of_a_credit_card(db):
+    """its lines of the period of a statement; the balance what is owed, from what was owed before it to its
+    closing; under the title its minimum and its due date"""
+    from test_core import customer
+    d = db.day() + 2 * DAY
+    a = db.fn('cc_open', int, 'VISA', customer(db), 2000, d.day if d.day <= 28 else 1)
+    k = db.fn('new_card', int, a)
+    p = account(db, 'TC1')
+    db.fn('deposit', int, p, 1000)
+    db.fn('cc_purchase', int, k, 300, 'Test ηλεκτρονικά')
+    db.conn.commit()
+    for _ in range(40):
+        if db.one('select count(*) from bk_cc_statement where account_id = :a', a=a)[0]:
+            break
+        close_days(db, 1)
+    db.fn('cc_purchase', int, k, 120, 'Test καύσιμα')
+    db.fn('cc_pay', int, a, p, 100)
+    db.conn.commit()
+    for _ in range(40):
+        if db.one('select count(*) from bk_cc_statement where account_id = :a', a=a)[0] == 2:
+            break
+        close_days(db, 1)
+    s = db.one('select period_from, stmt_date, opening, closing, min_due, due_date from bk_cc_statement '
+               'where account_id = :a order by stmt_date desc fetch first 1 rows only', a=a)
+    rs = rows(db, 'C', a, s[0], s[1])
+    assert rs[0]['prior_balance'] == s[2] == 300 and rs[-1]['balance'] == s[3]
+    assert [(r['debit'], r['credit']) for r in rs][:2] == [(120, None), (None, 100)]
+    assert rs[0]['descr'].endswith(' Αγορά: Test καύσιμα') and 'Πληρωμή κάρτας' in rs[1]['descr']
+    for r in rs:                                     # (owed: charges less payments)
+        assert r['balance'] == pytest.approx(r['prior_balance'] + (r['debit'] or 0) - (r['credit'] or 0), abs=1e-9)
+    t = db.one("select bk_report.period('C', :a, :f, :t), bk_report.title('C', :a), bk_report.label('BALANCE', 'C') "
+               "from dual", a=a, f=s[0], t=s[1])
+    assert ('Ελάχιστη καταβολή %s €' % ('%.2f' % s[4]).replace('.', ',')) in t[0] and s[5].strftime('%d/%m/%Y') in t[0]
+    assert t[1].startswith('Κίνηση πιστωτικής κάρτας ') and t[2] == 'Οφειλή'
+    assert db.one("select bk_report.period('S', :a, :f, :t) from dual", a=a, f=s[0], t=s[1])[0] == \
+        'Διάστημα: %s - %s' % (s[0].strftime('%d/%m/%Y'), s[1].strftime('%d/%m/%Y'))

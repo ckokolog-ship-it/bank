@@ -14,6 +14,8 @@ build_forms.sh on the Forms server, forms1). The same way as the forms of the mi
   BK_RULES      the rules of the movements: a rule set (new or changed) or removed (MANAGER)
   BK_PRODUCTS   the products (a manager corrects them) and their rates; a new rate from the business day on
   BK_CARDS      the debit cards: a new one, a new PIN (shown once), blocked; again active, cancelled (MANAGER)
+  BK_CCARDS     the credit cards: limit, owed, held, available, their statements; the limit (MANAGER), a payment,
+                a purchase (a test), a statement printed; a new card for a customer with its PIN (MANAGER)
   BK_ATMS       the ATMs, their cassettes; a cassette filled or emptied, the notes they give (MANAGER)
   BK_USERS      the users (ADMIN): a new one, a password, a role, active, unlocked
 
@@ -311,6 +313,67 @@ FORMS['BK_CARDS'] = dict(
          ('NEWCARD', 'button', 416, 458, 220, 'Νέα κάρτα (του κύριου δικαιούχου)', {})],
     lovs=[('LOV_CACC', 'Λογαριασμοί', ACCOUNTS_LOV, [('ID', 0, 'Κωδ.', 'CTL.C_ACC_ID'), ('TEXT', 380, 'Λογαριασμός', 'CTL.C_ACC_TEXT')])])
 
+# the credit cards (BK_CCARD_V): the card on the screen, its statements below (the newest first); its limit
+# (MANAGER), a payment from an account of the bank or in cash, a purchase (a test at the counter), the statement
+# chosen printed (BK_CC_STATEMENT); a new card for a customer (its account, its card, its PIN once: MANAGER)
+CC_PAY_LOV = ("select a.id, a.iban || ' ' || a.holder text from bk_account_v a, bk_product p "
+              "where a.status <> 'C' and p.code = a.product and p.kind <> 'CC' order by a.id")
+FORMS['BK_CCARDS'] = dict(
+    title='Πιστωτικές κάρτες',
+    find_title='Πιστωτικές κάρτες', find=("select id, iban || ' ' || holder text, product from bk_ccard_v order by id",
+                                         [('ID', 0, 'Κωδ.', 'FIND_ID'), ('TEXT', 380, 'Κάρτα · κάτοχος', 'FIND_TEXT'),
+                                          ('PRODUCT', 60, 'Προϊόν', None)]),
+    blocks=[dict(name='CC', table='BK_CCARD_V', order='id', top=TOP, rows=6, read_only=True,
+                 cols=[C('ID', '', 0, num=True, hidden=True),
+                       C('IBAN', 'Λογαριασμός κάρτας', 220, len=27),
+                       C('PRODUCT', 'Προϊόν', 54, len=10),
+                       C('HOLDER', 'Κάτοχος', 180, len=100),
+                       C('STATUS', 'Κατ.', 36, len=1),
+                       C('CREDIT_LIMIT', 'Όριο', 96, num=True, mask=MONEY),
+                       C('OWED', 'Οφειλή', 96, num=True, mask=MONEY),
+                       C('HELD', 'Δεσμευμένα', 86, num=True, mask=MONEY),
+                       C('AVAILABLE', 'Διαθέσιμο', 96, num=True, mask=MONEY),
+                       C('STMT_DAY', 'Ημ. κίν.', 50, num=True),
+                       C('LAST_STMT', 'Τελ. κίνηση', 84, date=True)]),
+            dict(name='CST', table='BK_CC_STATEMENT_V', order='stmt_date desc', top=TOP + 6 * ROW_H + 40, rows=5,
+                 read_only=True, where='account_id = :CC.ID',
+                 cols=[C('STMT_DATE', 'Κίνηση', 84, date=True),
+                       C('PERIOD_FROM', 'Από', 84, date=True),
+                       C('OPENING', 'Προηγούμενο', 90, num=True, mask=MONEY),
+                       C('PURCHASES', 'Αγορές', 90, num=True, mask=MONEY),
+                       C('PAYMENTS', 'Πληρωμές', 90, num=True, mask=MONEY),
+                       C('INTEREST', 'Τόκοι', 76, num=True, mask=MONEY),
+                       C('FEES', 'Τέλη', 66, num=True, mask=MONEY),
+                       C('CLOSING', 'Νέο υπόλοιπο', 96, num=True, mask=MONEY),
+                       C('MIN_DUE', 'Ελάχιστη', 86, num=True, mask=MONEY),
+                       C('DUE_DATE', 'Λήξη', 84, date=True),
+                       C('LATE_FEE', 'Καθυστ.', 60, num=True, mask=MONEY),
+                       C('STMT_TEXT', '', 0, len=10, hidden=True),
+                       C('FROM_TEXT', '', 0, len=10, hidden=True)])],
+    ctl=[('L_LIMIT', 'text', 10, 402, 110, 'Νέο όριο (€)', {'num': True}),
+         ('SETLIMIT', 'button', 126, 400, 150, 'Αλλαγή ορίου', {'role': 'MANAGER'}),
+         ('PRINTSTMT', 'button', 282, 400, 300, 'Εκτύπωση της επιλεγμένης κίνησης', {}),
+         ('P_FROM_TEXT', 'text', 10, 452, 400, 'Πληρωμή από λογαριασμό (λίστα)', {'len': 200, 'lov': 'LOV_PACC'}),
+         ('P_FROM_ID', 'hidden', 0, 0, 0, '', {'num': True}),
+         ('P_AMOUNT', 'text', 416, 452, 110, 'Ποσό (€)', {'num': True}),
+         ('PAYCC', 'button', 532, 450, 170, 'Πληρωμή', {}),
+         ('PAYCASH', 'button', 708, 450, 170, 'Πληρωμή μετρητοίς', {}),
+         ('Q_AMOUNT', 'text', 10, 502, 110, 'Αγορά: ποσό (€)', {'num': True}),
+         ('Q_MERCHANT', 'text', 126, 502, 260, 'Κατάστημα', {'len': 100}),
+         ('BUY', 'button', 392, 500, 170, 'Αγορά (δοκιμή)', {}),
+         ('N_CUST_TEXT', 'text', 10, 552, 300, 'Νέα κάρτα: πελάτης (λίστα)', {'len': 200, 'lov': 'LOV_CUST'}),
+         ('N_CUST_ID', 'hidden', 0, 0, 0, '', {'num': True}),
+         ('N_PRODUCT', 'text', 316, 552, 70, 'Προϊόν (λίστα)', {'len': 10, 'upper': True, 'lov': 'LOV_CCPROD', 'init': 'VISA'}),
+         ('N_LIMIT', 'text', 392, 552, 100, 'Όριο (€)', {'num': True}),
+         ('N_DAY', 'text', 498, 552, 70, 'Ημ. κίνησης', {'num': True}),
+         ('NEWCC', 'button', 574, 550, 220, 'Νέα πιστωτική κάρτα', {'role': 'MANAGER'}),
+         ('C_RESULT', 'display', 10, 602, 860, 'Το PIN της νέας κάρτας (μία φορά)', {'len': 300})],
+    lovs=[('LOV_PACC', 'Λογαριασμοί', CC_PAY_LOV, [('ID', 0, 'Κωδ.', 'CTL.P_FROM_ID'), ('TEXT', 380, 'Λογαριασμός', 'CTL.P_FROM_TEXT')]),
+          ('LOV_CUST', 'Πελάτες', "select id, name || ' ' || afm text from bk_customer where active = 'Y' order by name",
+           [('ID', 0, 'Κωδ.', 'CTL.N_CUST_ID'), ('TEXT', 320, 'Πελάτης', 'CTL.N_CUST_TEXT')]),
+          ('LOV_CCPROD', 'Προϊόντα καρτών', "select code, name from bk_product where kind = 'CC' and active = 'Y' order by id",
+           [('CODE', 70, 'Προϊόν', 'CTL.N_PRODUCT'), ('NAME', 220, 'Όνομα', None)])])
+
 # the ATMs and their cassettes (the notes they give: the setting ATM_NOTES); a cassette of the ATM on the screen
 # filled (+) or emptied (-); the notes of all the ATMs, the most of one withdrawal (MANAGER)
 FORMS['BK_ATMS'] = dict(
@@ -374,11 +437,11 @@ FORMS['BK_LOGIN'] = dict(
 # the role each form needs (ui.session_ok: TELLER < MANAGER < ADMIN); None: the login itself
 FORM_ROLES = {'BK_LOGIN': None, 'BK_MAIN': 'TELLER', 'BK_CUSTOMERS': 'TELLER', 'BK_ACCOUNTS': 'TELLER',
               'BK_MOVE': 'TELLER', 'BK_DAY': 'TELLER', 'BK_RULES': 'TELLER', 'BK_PRODUCTS': 'TELLER',
-              'BK_CARDS': 'TELLER', 'BK_ATMS': 'TELLER', 'BK_USERS': 'ADMIN'}
+              'BK_CARDS': 'TELLER', 'BK_CCARDS': 'TELLER', 'BK_ATMS': 'TELLER', 'BK_USERS': 'ADMIN'}
 
 # the first menu: a button for each form (NEW_FORM), the business day, the logout, the exit
 MENU_FORMS = [('BK_CUSTOMERS', 'Πελάτες'), ('BK_ACCOUNTS', 'Λογαριασμοί'), ('BK_MOVE', 'Κίνηση'),
-              ('BK_CARDS', 'Κάρτες'), ('BK_RULES', 'Κανόνες κινήσεων'), ('BK_PRODUCTS', 'Προϊόντα και επιτόκια'),
+              ('BK_CARDS', 'Κάρτες'), ('BK_CCARDS', 'Πιστωτικές κάρτες'), ('BK_RULES', 'Κανόνες κινήσεων'), ('BK_PRODUCTS', 'Προϊόντα και επιτόκια'),
               ('BK_ATMS', 'ATM'), ('BK_DAY', 'Ημέρα και κλείσιμο'), ('BK_USERS', 'Χρήστες')]
 FORMS['BK_MAIN'] = dict(
     title='Bank',
@@ -408,6 +471,7 @@ MENU_BAR = [
                          ('ACCOUNTS', 'Λογαριασμοί', "new_form('BK_ACCOUNTS');"),
                          ('MOVE', 'Κίνηση', "new_form('BK_MOVE');"),
                          ('CARDS', 'Κάρτες', "new_form('BK_CARDS');"),
+                         ('CCARDS', 'Πιστωτικές κάρτες', "new_form('BK_CCARDS');"),
                          ('DAY', 'Ημέρα και κλείσιμο', "new_form('BK_DAY');")]),
     ('SETUP', 'Ρυθμίσεις', [('RULES', 'Κανόνες κινήσεων', "new_form('BK_RULES');"),
                             ('PRODUCTS', 'Προϊόντα και επιτόκια', "new_form('BK_PRODUCTS');"),
