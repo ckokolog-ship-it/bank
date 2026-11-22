@@ -555,6 +555,21 @@ async function atms() {
         try { await api('atms/' + m.code + '/cash', { amount: Number(v.replace(',', '.')) }); toast('Έγινε'); route(); } catch (e) { toast(e.message, true); }
       } }, 'Μετρητά') : null))))));
   box.append(h('p', { class: 'muted' }, 'Οι αναλήψεις από ATM γίνονται με κάρτα και PIN (λογαριασμός → καρτέλα «Κάρτες»), μέσα στους κανόνες του καναλιού ATM.'));
+  if (can('MANAGER')) {
+    const result = h('div');
+    box.append(h('h3', null, 'PIN για πολλές κάρτες'),
+      h('p', { class: 'muted' }, 'Οι κάρτες χωρίς PIN (του demo: όλες) παίρνουν PIN: το ίδιο σε όλες (για δοκιμή), ή ένα νέο η καθεμιά. '
+        + 'Η λίστα φαίνεται μία φορά: η βάση κρατά μόνο ένα hash.'),
+      form([field('Το ίδιο PIN σε όλες (κενό: ένα νέο η καθεμιά)', h('input', { name: 'pin', inputmode: 'numeric', maxlength: 4, autocomplete: 'off' })),
+        field('Ποιες κάρτες', sel('all', { N: 'Όσες δεν έχουν PIN', Y: 'Όλες (και όσες έχουν: νέο PIN)' }))], async (f) => {
+        const v = values(f);
+        if (v.all === 'Y' && !confirm('Νέο PIN σε όλες τις ενεργές κάρτες; Τα παλιά δεν ισχύουν πια.')) return;
+        const rows = await api('cards/pins', { pin: v.pin, all: v.all === 'Y' });
+        toast(rows.length + ' κάρτες με PIN');
+        result.replaceChildren(rows.length ? table(['Κάρτα', 'Κάτοχος', 'Λογαριασμός', 'PIN'], rows.map((r) => h('tr', null,
+          td(pan(r.pan), 'mono'), td(r.holder), td(iban(r.iban), 'mono'), td(r.pin, 'mono')))) : h('p', { class: 'muted' }, 'Καμία κάρτα χωρίς PIN.'));
+      }, 'Έκδοση PIN'), result);
+  }
   return box;
 }
 

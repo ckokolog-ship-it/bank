@@ -26,6 +26,13 @@ import java.util.concurrent.Executors;
  *   java -jar bk-api.jar --add-user admin ADMIN "Όνομα Επώνυμο"
  *   java -jar bk-api.jar --password admin          (a new password, and unlocked)
  * </pre>
+ *
+ * The PIN of the cards without one (the demo: none), each a new one, or the same to all (--same: asked); --all:
+ * every card. A list back: card, holder, account, PIN (to be given to the holders):
+ *
+ * <pre>
+ *   java -jar bk-api.jar --card-pins [--same] [--all]
+ * </pre>
  */
 public final class Main {
     private Main() {
@@ -49,6 +56,9 @@ public final class Main {
     }
 
     private static int command(String[] a) throws Exception {
+        if ("--card-pins".equals(a[0])) {
+            return cardPins(java.util.List.of(a).subList(1, a.length));
+        }
         boolean add = "--add-user".equals(a[0]) && a.length >= 3;
         boolean reset = "--password".equals(a[0]) && a.length == 2;
         if (!add && !reset) {
@@ -77,6 +87,45 @@ public final class Main {
                 System.out.println("== the password of " + a[1] + ": changed, unlocked");
             }
             c.commit();
+            return 0;
+        } catch (Http.Fail f) {
+            System.err.println("== " + f.getMessage());
+            return 1;
+        }
+    }
+
+    private static int cardPins(java.util.List<String> opts) throws Exception {
+        String pin = null;
+        for (String o : opts) {
+            if (!"--same".equals(o) && !"--all".equals(o)) {
+                System.err.println("java -jar bk-api.jar --card-pins [--same] [--all]");
+                return 2;
+            }
+        }
+        if (opts.contains("--same")) {
+            Console con = System.console();
+            if (con == null) {
+                System.err.println("== a terminal is needed (the PIN is asked)");
+                return 2;
+            }
+            char[] p1 = con.readPassword("Το PIN για όλες τις κάρτες (4 ψηφία): ");
+            char[] p2 = con.readPassword("Ξανά: ");
+            if (p1 == null || !java.util.Arrays.equals(p1, p2)) {
+                System.err.println("== not the same");
+                return 1;
+            }
+            pin = new String(p1);
+        }
+        Db db = Db.fromEnvironment();
+        try (Connection c = db.connection()) {
+            java.util.List<java.util.Map<String, Object>> rows = Atm.pinsForAll(c, pin, opts.contains("--all"));
+            c.commit();
+            for (java.util.Map<String, Object> r : rows) {
+                String pan = String.valueOf(r.get("pan")).replaceAll("(.{4})(?!$)", "$1 ");
+                System.out.printf("%s  %s  %-30s  %s%n", pan, r.get("iban"), r.get("holder"), pin == null ? r.get("pin") : "(το ίδιο)");
+            }
+            System.out.println("== " + rows.size() + (rows.size() == 1 ? " κάρτα" : " κάρτες") + " με PIN"
+                    + (rows.isEmpty() ? " (καμία χωρίς PIN: --all για όλες)" : ""));
             return 0;
         } catch (Http.Fail f) {
             System.err.println("== " + f.getMessage());

@@ -87,6 +87,27 @@ final class Atm {
                 Auth.pbkdf2(pin, salt, Auth.ITERATIONS), salt, Auth.ITERATIONS, cardId);
     }
 
+    /**
+     * a PIN to many cards at once (the cards of the demo have none): each active card, not expired, without a
+     * PIN (p_all: with one too); the same PIN to all (p_pin) or a new one to each (null). The cards and their PIN
+     * back: to be given to their holders
+     */
+    static List<Map<String, Object>> pinsForAll(Connection c, String pin, boolean all) throws SQLException {
+        if (pin != null) {
+            pinOk(pin);
+        }
+        List<Map<String, Object>> rows = Db.rows(c, "select k.id, k.pan, c.name holder, a.iban from bk_card k "
+                + "join bk_customer c on c.id = k.customer_id join bk_account a on a.id = k.account_id "
+                + "where k.status = 'A' and k.expires >= bk_core.open_day and a.status <> 'C' "
+                + "and (? = 'Y' or k.pin_hash is null) order by k.id", all ? "Y" : "N");
+        for (Map<String, Object> r : rows) {
+            String p = pin != null ? pin : newPin();
+            setPin(c, ((Number) r.get("id")).longValue(), p);
+            r.put("pin", p);
+        }
+        return rows;
+    }
+
     // ---------------------------------------------------------------------------------------------
     private void handle(HttpExchange ex) throws IOException {
         try {

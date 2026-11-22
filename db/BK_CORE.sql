@@ -427,6 +427,30 @@ create or replace package body bk_core as
   end;
 
   -- ---------------------------------------------------------------------------------------------
+  -- the lock of the accounts of a movement, first of all (before its rules are read): two movements of one
+  -- account wait for each other, one after the other, so each sees what the other left (its balance, its limits
+  -- of the day and of the month). Two accounts: the lower id first, so two transfers in opposite directions
+  -- wait for each other and never deadlock. Held till the commit (or the rollback) of the caller
+  procedure lock_account(p_account_id number) is
+    v number;
+  begin
+    select id into v from bk_account where id = p_account_id for update;
+  exception
+    when no_data_found then
+      fail(8, 'Δεν υπάρχει λογαριασμός ' || p_account_id);
+  end;
+
+  procedure lock_accounts(p_a number, p_b number default null) is
+  begin
+    if p_b is null or p_a = p_b then
+      lock_account(p_a);
+    else
+      lock_account(least(p_a, p_b));
+      lock_account(greatest(p_a, p_b));
+    end if;
+  end;
+
+  -- ---------------------------------------------------------------------------------------------
   -- the rules of the movements
   function money_text(p number) return varchar2 is
   begin
@@ -589,12 +613,12 @@ create or replace package body bk_core as
   -- ---------------------------------------------------------------------------------------------
   function deposit(p_account_id number, p_amount number, p_descr varchar2 default null,
                    p_value_date date default null, p_channel varchar2 default 'BR') return number is
-    a bk_account%rowtype := account_row(p_account_id);
     e number;
     fee number;
   begin
     amount_ok(p_amount);
-    into_ok(a);
+    lock_accounts(p_account_id);
+    into_ok(account_row(p_account_id));
     fee := rules_ok(p_account_id, 'DEP', p_channel, p_amount);
     e := new_entry('DEP', p_value_date, nvl(p_descr, 'Κατάθεση'), null, p_channel);
     line(e, null, 'CASH', p_amount, 0);
@@ -609,6 +633,7 @@ create or replace package body bk_core as
     fee number;
   begin
     amount_ok(p_amount);
+    lock_accounts(p_account_id);
     fee := rules_ok(p_account_id, 'WDR', p_channel, p_amount);
     out_ok(p_account_id, p_amount + fee);
     floor_ok(p_account_id, 'WDR', p_channel, p_amount + fee);
@@ -621,7 +646,6 @@ create or replace package body bk_core as
 
   function transfer(p_from_id number, p_to_id number, p_amount number, p_descr varchar2 default null,
                     p_value_date date default null, p_channel varchar2 default 'BR') return number is
-    t bk_account%rowtype := account_row(p_to_id);
     e number;
     fee number;
     fee_to number;
@@ -630,7 +654,8 @@ create or replace package body bk_core as
     if p_from_id = p_to_id then
       fail(20, 'Μεταφορά στον ίδιο λογαριασμό');
     end if;
-    into_ok(t);
+    lock_accounts(p_from_id, p_to_id);
+    into_ok(account_row(p_to_id));
     fee := rules_ok(p_from_id, 'TRO', p_channel, p_amount);
     fee_to := rules_ok(p_to_id, 'TRI', p_channel, p_amount);
     out_ok(p_from_id, p_amount + fee);
@@ -652,6 +677,7 @@ create or replace package body bk_core as
     if iban_ok(replace(upper(p_iban_to), ' ')) = 'N' then
       fail(21, 'Λάθος IBAN δικαιούχου: ' || p_iban_to);
     end if;
+    lock_accounts(p_from_id);
     fee := rules_ok(p_from_id, 'OUT', p_channel, p_amount);
     out_ok(p_from_id, p_amount + fee);
     floor_ok(p_from_id, 'OUT', p_channel, p_amount + fee);
@@ -664,7 +690,6 @@ create or replace package body bk_core as
 
   function transfer_in(p_to_id number, p_amount number, p_iban_from varchar2, p_descr varchar2 default null,
                        p_value_date date default null, p_channel varchar2 default 'BR') return number is
-    t bk_account%rowtype := account_row(p_to_id);
     e number;
     fee number;
   begin
@@ -672,7 +697,8 @@ create or replace package body bk_core as
     if iban_ok(replace(upper(p_iban_from), ' ')) = 'N' then
       fail(21, 'Λάθος IBAN αποστολέα: ' || p_iban_from);
     end if;
-    into_ok(t);
+    lock_accounts(p_to_id);
+    into_ok(account_row(p_to_id));
     fee := rules_ok(p_to_id, 'INC', p_channel, p_amount);
     e := new_entry('INC', p_value_date, nvl(p_descr, 'Μεταφορά από ' || replace(upper(p_iban_from), ' ')), null, p_channel);
     line(e, null, 'CLEAR', p_amount, 0);
@@ -752,7 +778,7 @@ create or replace package body bk_core as
     n number;
   begin
     begin
-      select * into o from bk_entry where id = p_entry_id;
+      select * into o from bk_entry where id = p_entry_id for update;     -- (a second reversal waits here)
     exception
       when no_data_found then fail(22, 'Δεν υπάρχει κίνηση ' || p_entry_id);
     end;
@@ -765,7 +791,7 @@ create or replace package body bk_core as
     end if;
     -- money back out of an account that took it: within its balance (as any withdrawal)
     for l in (select account_id, sum(credit) - sum(debit) took from bk_line
-              where entry_id = p_entry_id and account_id is not null group by account_id) loop
+              where entry_id = p_entry_id and account_id is not null group by account_id order by account_id) loop
       if l.took > 0 then
         out_ok(l.account_id, l.took);
       else

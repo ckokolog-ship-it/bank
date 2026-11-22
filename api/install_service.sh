@@ -8,6 +8,9 @@
 #   sudo ./install_service.sh --no-build          the jar of target/ as it is
 #   sudo ./install_service.sh --password          the password of the user BANK again (asked)
 #   sudo ./install_service.sh --add-user admin ADMIN "Όνομα Επώνυμο"    a user of the pages (its password asked)
+#   sudo ./install_service.sh --card-pins [--same] [--all]   a PIN to the cards without one (the demo: all of them):
+#                                                 a new one each (a list: card, account, holder, PIN), or --same:
+#                                                 one PIN to all (asked); --all: every card, a new PIN
 #   ./install_service.sh --status                 the service, and /api/health
 #   sudo ./install_service.sh --uninstall
 #
@@ -39,8 +42,9 @@ while [ $# -gt 0 ]; do
     --status) MODE=status ;;
     --password) MODE=password ;;
     --add-user) MODE=add-user; shift; ADD=("$@"); break ;;
+    --card-pins) MODE=card-pins; shift; ADD=("$@"); break ;;
     --uninstall) MODE=uninstall ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "== unknown: $1 (--help)"; exit 2 ;;
   esac
   shift
@@ -104,14 +108,14 @@ if [ "$MODE" = password ]; then
   exit 0
 fi
 
-if [ "$MODE" = add-user ]; then
-  [ ${#ADD[@]} -ge 2 ] || die "--add-user <username> TELLER|MANAGER|ADMIN [\"full name\"]"
+if [ "$MODE" = add-user ] || [ "$MODE" = card-pins ]; then
+  [ "$MODE" = card-pins ] || [ ${#ADD[@]} -ge 2 ] || die "--add-user <username> TELLER|MANAGER|ADMIN [\"full name\"]"
   [ -f "$ENVF" ] || die "no $ENVF: sudo $0 first (the install)"
   [ -f "$HOME_DIR/bk-api.jar" ] || die "no $HOME_DIR/bk-api.jar: sudo $0 first (the install)"
   find_jdk
   set -a; . "$ENVF"; set +a          # (the name: UTF-8, whatever the locale of the terminal)
   exec runuser -u "$OWNER" -- env LC_ALL=C.UTF-8 BK_DB_URL="$BK_DB_URL" BK_DB_USER="$BK_DB_USER" BK_DB_PASSWORD="$BK_DB_PASSWORD" \
-    "$JDK/bin/java" -jar "$HOME_DIR/bk-api.jar" --add-user "${ADD[@]}"
+    "$JDK/bin/java" -jar "$HOME_DIR/bk-api.jar" "--$MODE" "${ADD[@]}"
 fi
 
 find_jdk
