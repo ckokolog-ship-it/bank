@@ -12,6 +12,7 @@
 #     those of "EncodingScheme AdobeStandardEncoding" it does not take for text in Greek, and takes Symbol (the only
 #     FontSpecific one) for every field: "GR" as "ΓΡ" in HTML, symbols for Greek in PDF (Oracle bug 2906401). The
 #     AFM of Helvetica, Courier, Times made FontSpecific (the folder kept first, AFM.bk-<date>; --undo-afm: back).
+#     (their files there have no extension: Helvetica, Courier-Bold, ...)
 #
 #   ./pdf_fonts.sh            then, as chris: sudo systemctl restart weblogic-forms
 #   ./pdf_fonts.sh --check    what is there now
@@ -61,7 +62,7 @@ check() {
   for a in "${AFMS[@]}"; do
     [ -d "$a" ] || continue
     echo "== $a (Helvetica, Courier, Times: right FontSpecific):"
-    grep -H '^EncodingScheme' "$a"/Helvetica*.afm "$a"/Courier*.afm "$a"/Times*.afm 2>/dev/null |
+    grep -H '^EncodingScheme' "$a"/Helvetica* "$a"/Courier* "$a"/Times* 2>/dev/null |
       sed 's|.*/||; s/:EncodingScheme / /' | awk '{print "   " $0}'
   done
   echo "== a PDF: open a report in the browser; with pdffonts (sudo dnf -y install poppler-utils), right: DejaVuSans, emb yes"
@@ -75,7 +76,7 @@ if [ "${1:-}" = --undo-afm ]; then
   for a in "${AFMS[@]}"; do
     b=$(ls -d "$a".bk-* 2>/dev/null | head -1)
     [ -n "$b" ] || continue
-    cp -p "$b"/*.afm "$a"/ && echo "== $a: as in $b"
+    cp -p "$b"/* "$a"/ && echo "== $a: as in $b"
   done
   echo "== now, as chris: sudo systemctl restart weblogic-forms"
   exit 0
@@ -140,7 +141,7 @@ done
 # 4. the AFM of the faces of the reports: FontSpecific, so the engine keeps them for Greek (not Symbol)
 for a in "${AFMS[@]}"; do
   [ -d "$a" ] || continue
-  files=$(grep -l '^EncodingScheme AdobeStandardEncoding' "$a"/Helvetica*.afm "$a"/Courier*.afm "$a"/Times*.afm 2>/dev/null)
+  files=$(grep -l '^EncodingScheme AdobeStandardEncoding' "$a"/Helvetica* "$a"/Courier* "$a"/Times* 2>/dev/null)
   if [ -z "$files" ]; then
     echo "== $a: FontSpecific already"
     continue
