@@ -100,3 +100,7 @@ tfoot td { font-weight: 700; }
   .who #who { display: none; }
   .kv { grid-template-columns: 1fr 1fr; }
 }
+
+/* the search by meaning: the bars of the spending, the box of the question */
+.bar { height: 10px; border-radius: 5px; background: var(--accent); }
+input.wide { min-width: 320px; }

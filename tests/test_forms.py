@@ -877,3 +877,29 @@ def test_the_suspicious_movements(cur):
     assert cur.execute('select status from bk_account where id = :a', a=a).fetchone()[0] == 'O'
     # the training: the manager cannot
     assert 'ADMIN' in fails(cur, "ui.press('CTL.TRAIN');")
+
+
+@needs_db
+def test_the_search_by_meaning(cur):
+    """BK_SEARCH: a question (Enter or the button), of an account; its category and all its movements; the spending
+    of the account"""
+    if cur.execute('select bk_vec.ready from dual').fetchone()[0] != 'Y':
+        pytest.skip('no model BK_EMBED: ai/mk_embed_model.sh, db/LOAD_EMBED.sql')
+    compile_ui(cur, 'BK_SEARCH')
+    run(cur, 'ui.init;')
+    assert 'multilingual-e5-small' in item(cur, 'CTL.X_MODEL')
+    assert 'Γράψε' in fails(cur, "ui.press('CTL.SEARCH');", CTL__Q='')
+    assert 'Πρώτα' in fails(cur, "ui.press('CTL.CATALL');")
+    a = new_account(cur, 500)
+    cur.callfunc('bk_core.transfer_out', int, [a, 30, 'GR9608100010000001234567890', 'Πληρωμή με κάρτα: EKO βενζίνη Λάρισας'],
+                 {'p_channel': 'WEB'})
+    cur.connection.commit()
+    cur.callfunc('bk_vec.refresh', int)
+    cur.connection.commit()
+    run(cur, "ui.press('CTL.Q');", CTL__Q='καύσιμα για το αυτοκίνητο', CTL__S_ACC_ID=str(a), CTL__S_ACC_TEXT='x')
+    assert '1 κινήσεις' in msgs(cur) and item(cur, 'CTL.X_CAT_CODE') == 'FUEL'
+    assert 'SPEND:account_id = %d;' % a in queries(cur)
+    assert cur.execute('select descr from bk_ai_hit').fetchall() == [('Πληρωμή με κάρτα: EKO βενζίνη Λάρισας',)]
+    run(cur, "ui.press('CTL.CATALL');", CTL__X_CAT_CODE='FUEL', CTL__X_CAT='Καύσιμα και αυτοκίνητο',
+        CTL__S_ACC_ID=str(a), CTL__S_ACC_TEXT='x')
+    assert 'Καύσιμα και αυτοκίνητο: 1 κινήσεις' in msgs(cur)

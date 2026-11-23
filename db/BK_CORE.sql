@@ -1442,9 +1442,16 @@ create or replace package body bk_core as
         lo := lo + 200000;
       end loop;
     end if;
-    -- the suspicious movements of the day (BK_AI.sql: nothing without a model); never in the way of the close
+    -- the suspicious movements of the day (BK_AI.sql), the texts of its movements with their vectors (BK_VECTOR.sql):
+    -- nothing without their models; never in the way of the close
     begin
       execute immediate 'declare n number; begin n := bk_ai.scan(:d); end;' using d;
+    exception
+      when others then
+        null;
+    end;
+    begin
+      execute immediate 'declare n number; begin n := bk_vec.refresh; end;';
     exception
       when others then
         null;

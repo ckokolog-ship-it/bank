@@ -431,3 +431,21 @@ def test_the_suspicious_movements(base, conn):
     if rows:
         x = ok(base, '/api/ai/alerts/%d' % rows[0]['id'], {'status': 'C', 'note': 'test'}, who='tst-manager')
         assert x['status'] == 'C' and x['note'] == 'test' and x['reviewed_by'] == 'tst-manager'
+
+
+def test_the_search_by_meaning(base, conn):
+    """/api/ai/search (anyone logged in): a question, its category, the movements; all of a category; the spending"""
+    if conn.cursor().execute('select bk_vec.ready from dual').fetchone()[0] != 'Y':
+        pytest.skip('no model BK_EMBED: ai/mk_embed_model.sh, db/LOAD_EMBED.sql')
+    a = open_account(base, 400)
+    ok(base, '/api/movements', {'kind': 'OUT', 'account_id': a['id'], 'amount': 25, 'iban': 'GR9608100010000001234567890',
+                                'descr': 'Πληρωμή με κάρτα: Πιτσαρία Η Νόστιμη'})
+    conn.cursor().callfunc('bk_vec.refresh', int)
+    conn.commit()
+    r = ok(base, '/api/ai/search?q=' + urllib.parse.quote('φαγητό έξω') + '&account=' + a['iban'])
+    assert r['category']['code'] == 'FOOD' and [x['descr'] for x in r['rows']] == ['Πληρωμή με κάρτα: Πιτσαρία Η Νόστιμη']
+    r = ok(base, '/api/ai/search?category=FOOD&account=%d' % a['id'])
+    assert r['category']['name'] == 'Φαγητό έξω' and len(r['rows']) == 1
+    assert call(base, '/api/ai/search', token=tok(base, 'tst-teller'))[0] == 400
+    s = ok(base, '/api/ai/spending?account=%d' % a['id'])
+    assert [(x['category'], x['amount']) for x in s] == [('FOOD', 25)]
