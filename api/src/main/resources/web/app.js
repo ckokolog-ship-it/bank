@@ -54,8 +54,9 @@ function toast(text, bad) {
   toast.timer = setTimeout(() => t.classList.add('hidden'), bad ? 6000 : 3000);
 }
 
-function table(heads, rows, foot) {
-  return h('div', { class: 'table-wrap' }, h('table', null,
+// (cls: a class of the table, e.g. "tight": every cell on one line, the table scrolled across when it is wide)
+function table(heads, rows, foot, cls) {
+  return h('div', { class: 'table-wrap' }, h('table', { class: cls || null },
     h('thead', null, h('tr', null, heads.map((x) => h('th', { class: x.startsWith('#') ? 'num' : null }, x.replace(/^#/, ''))))),
     h('tbody', null, rows.length ? rows : h('tr', null, h('td', { colspan: heads.length, class: 'muted' }, 'Τίποτα'))),
     foot ? h('tfoot', null, foot) : null));
@@ -715,7 +716,7 @@ function rulesTable(rows, reload) {
       td(can('MANAGER') ? h('button', { class: 'link', onclick: async () => {
         if (!confirm('Αφαίρεση του κανόνα;')) return;
         try { await api('rules/' + r.id + '/remove', {}); toast('Αφαιρέθηκε'); reload(); } catch (e) { toast(e.message, true); }
-      } }, 'Αφαίρεση') : ''))));
+      } }, 'Αφαίρεση') : ''))), null, 'tight');
 }
 
 function ruleForm(fixed, reload, products) {

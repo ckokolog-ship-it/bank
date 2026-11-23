@@ -38,6 +38,8 @@ ROW_H = 0.17
 # "ΓΡ" in HTML and the Greek symbols in PDF); in PDF a TrueType with Greek in its place by uifont.ali (DejaVu Sans:
 # pdf_fonts.sh on forms1; on Windows Helvetica -> Arial)
 FONT, SIZE = 'Helvetica', 8
+# the rows: 7 points (in the PDF the face is DejaVu Sans, wider than Helvetica: at 8 the words of a row were cut)
+ROW_SIZE = 7
 
 # the columns: (item, x in the body, width, alignment); the heading of the page has the same x + LEFT
 COLS = [('LDATE', 0.00, 0.72, 'start'), ('DOC_TEXT', 0.75, 0.72, 'start'), ('DESCR', 1.50, 2.55, 'start'),
@@ -151,7 +153,7 @@ def build(name, r):
             '          <generalLayout verticalElasticity="expand"/>']
     for c, x, w, a in COLS:
         m = 'DD/MM/YYYY' if c == 'LDATE' else masks.get(c, mask) if a == 'end' else None
-        out.append(field('F_' + c, c, x, 0, w, align=a, mask=m, pad='          '))
+        out.append(field('F_' + c, c, x, 0, w, align=a, mask=m, size=ROW_SIZE, pad='          '))
     out.append('        </repeatingFrame>')
     # the totals after the last row: a frame of their own under the rows, pushed down with them as
     # one (fields alone at the bottom edge of M_ROWS stayed where they were drawn, on the 5th row)

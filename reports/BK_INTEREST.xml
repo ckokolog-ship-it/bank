@@ -86,27 +86,27 @@ order by seq]]>
           <geometryInfo x="0.00000" y="0.00000" width="7.30000" height="0.17000"/>
           <generalLayout verticalElasticity="expand"/>
           <field name="F_LDATE" source="LDATE" minWidowLines="1" spacing="0" alignment="start" formatMask="DD/MM/YYYY">
-            <font face="Helvetica" size="8"/>
+            <font face="Helvetica" size="7"/>
             <geometryInfo x="0.00000" y="0.00000" width="0.72000" height="0.17000"/>
           </field>
           <field name="F_DOC_TEXT" source="DOC_TEXT" minWidowLines="1" spacing="0" alignment="start">
-            <font face="Helvetica" size="8"/>
+            <font face="Helvetica" size="7"/>
             <geometryInfo x="0.75000" y="0.00000" width="0.72000" height="0.17000"/>
           </field>
           <field name="F_DESCR" source="DESCR" minWidowLines="1" spacing="0" alignment="start">
-            <font face="Helvetica" size="8"/>
+            <font face="Helvetica" size="7"/>
             <geometryInfo x="1.50000" y="0.00000" width="2.55000" height="0.17000"/>
           </field>
           <field name="F_DEBIT" source="DEBIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D00">
-            <font face="Helvetica" size="8"/>
+            <font face="Helvetica" size="7"/>
             <geometryInfo x="4.08000" y="0.00000" width="0.95000" height="0.17000"/>
           </field>
           <field name="F_CREDIT" source="CREDIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-            <font face="Helvetica" size="8"/>
+            <font face="Helvetica" size="7"/>
             <geometryInfo x="5.06000" y="0.00000" width="1.00000" height="0.17000"/>
           </field>
           <field name="F_BALANCE" source="BALANCE" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-            <font face="Helvetica" size="8"/>
+            <font face="Helvetica" size="7"/>
             <geometryInfo x="6.09000" y="0.00000" width="1.15000" height="0.17000"/>
           </field>
         </repeatingFrame>
