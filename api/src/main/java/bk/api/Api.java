@@ -26,8 +26,10 @@ import java.util.Map;
  *   GET  /api/day                                the business day, the last one closed, BK_CHECK, the entries of the day
  *   POST /api/day/close                          the business day closed: its interest (M)
  *   GET  /api/check                              the rows of BK_CHECK (none: all is right)
+ *   GET  /api/ai/search?q=&account=&category=&limit=   the movements nearest in meaning (db/BK_VECTOR.sql): {category, rows}
+ *   GET  /api/ai/spending?account=               what an account spent in 12 months by category
  *   GET  /api/ai/alerts?status=&limit=            the suspicious movements (db/BK_AI.sql: N new, C not a fraud, F a fraud)
- *   GET  /api/ai/model                           the model: ready (Y/N), in a line, the threshold
+ *   GET  /api/ai/model                           the models: ready (Y/N), in a line, the threshold; the embeddings
  *   POST /api/ai/scan {day}                      the movements of a day (none: the business day) scored: the new alerts (M)
  *   POST /api/ai/train                           the model again from the days closed (A)
  *   POST /api/ai/alerts/{id} {status, note, block}   C not a fraud, F a fraud (block N: its account not blocked) (M)
@@ -224,7 +226,9 @@ final class Api {
                 return loans(c, u, get, p, q, in);
             }
             case "ai" -> {
-                need(u, "MANAGER");
+                if (!(get && (is(p, "ai", "search") || is(p, "ai", "spending")))) {
+                    need(u, "MANAGER");
+                }
                 return ai(c, u, get, p, q, in);
             }
             case "branches" -> {
@@ -318,7 +322,8 @@ final class Api {
 
     private static Map<String, Object> aiModel(Connection c) throws SQLException {
         return Db.row(c, "select bk_ai.ready ready, bk_ai.model_info info, bk_ai.threshold threshold, "
-                + "(select count(*) from bk_ai_alert where status = 'N') open from dual");
+                + "(select count(*) from bk_ai_alert where status = 'N') open, bk_vec.ready vec_ready, "
+                + "bk_vec.model_info vec_info from dual");
     }
 
     private Object ai(Connection c, Auth.User u, boolean get, String[] p, Map<String, String> q, Map<String, Object> in)
@@ -331,6 +336,39 @@ final class Api {
         }
         if (get && is(p, "ai", "model")) {
             return aiModel(c);
+        }
+        if (get && is(p, "ai", "search")) {
+            String s = q.getOrDefault("q", "").trim();
+            String cat = q.getOrDefault("category", "").trim().toUpperCase();
+            String acc = q.getOrDefault("account", "").trim();
+            Object va = acc.isEmpty() ? null : toAccount(c, acc);
+            Map<String, Object> r = new LinkedHashMap<>();
+            if (cat.isEmpty()) {
+                if (s.isEmpty()) {
+                    throw new Http.Fail(400, "missing", "q: τι ψάχνεις");
+                }
+                try (java.sql.CallableStatement st = c.prepareCall("begin bk_vec.category_of(?, ?, ?); end;")) {
+                    st.setString(1, s);
+                    st.registerOutParameter(2, java.sql.Types.VARCHAR);
+                    st.registerOutParameter(3, java.sql.Types.VARCHAR);
+                    st.execute();
+                    Map<String, Object> k = new LinkedHashMap<>();
+                    k.put("code", st.getString(2));
+                    k.put("name", st.getString(3));
+                    r.put("category", k);
+                }
+            } else {
+                r.put("category", Db.row(c, "select code, name from bk_ai_category where code = ?", cat));
+            }
+            r.put("rows", Db.rows(c, "select line_id, entry_id, account_id, iban, holder, book_date, kind, descr, debit, credit, "
+                    + "currency, similarity, category from table(bk_vec.search(?, ?, ?, ?))",
+                    cat.isEmpty() ? s : null, va, limit(q), cat.isEmpty() ? null : cat));
+            return r;
+        }
+        if (get && is(p, "ai", "spending")) {
+            long acc = toAccount(c, q.getOrDefault("account", ""));
+            return Db.rows(c, "select category, name, amount, movements from bk_ai_spend12_v where account_id = ? "
+                    + "order by amount desc", acc);
         }
         if (!get && is(p, "ai", "scan")) {
             LocalDate d = Http.dateValue(in, "day");

@@ -222,6 +222,8 @@ PACKAGE BODY ui IS
       day_refresh;
     ELSIF c_form = 'BK_LOANS' THEN
       copy('Ίδια δόση, λιγότερες δόσεις', 'CTL.P_MODE_TEXT');
+    ELSIF c_form = 'BK_SEARCH' THEN
+      copy(bk_vec.model_info, 'CTL.X_MODEL');
     ELSIF c_form = 'BK_AI' THEN
       copy(to_char(bk_core.open_day, 'DD/MM/YYYY'), 'CTL.S_DAY');
       copy(bk_ai.model_info, 'CTL.X_MODEL');
@@ -787,6 +789,39 @@ PACKAGE BODY ui IS
       END IF;
       open_report('BK_BR_CASH', '&P_KIND=B&P_ACCOUNT=' || to_number(k) || '&P_FROM='
                   || to_char(date_in('CTL.P_FROM'), 'DD/MM/YYYY') || '&P_TO=' || to_char(date_in('CTL.P_TO'), 'DD/MM/YYYY'));
+    -- BK_SEARCH: the movements nearest in meaning to the question (of the account, or all); its category; all the
+    -- movements of that category; what the account spent by category
+    ELSIF p_item IN ('CTL.SEARCH', 'CTL.Q', 'CTL.CATALL') THEN
+      acc := num('CTL.S_ACC_ID');
+      IF name_in('CTL.S_ACC_TEXT') IS NULL THEN
+        acc := NULL;
+      END IF;
+      IF p_item = 'CTL.CATALL' THEN
+        k := name_in('CTL.X_CAT_CODE');
+        IF k IS NULL THEN
+          fail('Πρώτα μια αναζήτηση: η κατηγορία της');
+        END IF;
+        e := bk_vec.fill_hits(NULL, acc, k);
+        message(name_in('CTL.X_CAT') || ': ' || e || ' κινήσεις');
+      ELSE
+        IF name_in('CTL.Q') IS NULL THEN
+          fail('Γράψε τι ψάχνεις, π.χ. φαγητό έξω');
+        END IF;
+        bk_vec.category_of(name_in('CTL.Q'), k, t);
+        copy(k, 'CTL.X_CAT_CODE');
+        copy(t, 'CTL.X_CAT');
+        e := bk_vec.fill_hits(name_in('CTL.Q'), acc, NULL);
+        message(e || ' κινήσεις κοντά σε «' || name_in('CTL.Q') || '»');
+      END IF;
+      go_block('HIT');
+      execute_query;
+      IF acc IS NOT NULL THEN
+        set_block_property('SPEND', DEFAULT_WHERE, 'account_id = ' || to_char(acc));
+        go_block('SPEND');
+        execute_query;
+        go_block('HIT');
+      END IF;
+
     -- BK_AI: the alert on the screen (not a fraud; a fraud: its account blocked); the scan of a day; the model
     ELSIF p_item IN ('CTL.OKAY', 'CTL.FRAUD') THEN
       id_ := num('AL.ID');

@@ -103,6 +103,29 @@ declare
     return v;
   end;
 
+  -- a shop of a kind, by a number (the day, the account): its name as a bank sees it (for the search by meaning:
+  -- db/BK_VECTOR.sql); no random draw of its own (the rest of the demo the same as before)
+  function shop(p_kind varchar2, p_n number) return varchar2 is
+    k pls_integer := mod(p_n, 4);
+  begin
+    return case p_kind
+      when 'σούπερ μάρκετ' then case k when 0 then 'ΣΚΛΑΒΕΝΙΤΗΣ σούπερ μάρκετ' when 1 then 'ΑΒ Βασιλόπουλος τρόφιμα'
+                                       when 2 then 'Lidl σούπερ μάρκετ' else 'Μανάβικο Η Λαϊκή φρούτα και λαχανικά' end
+      when 'καύσιμα' then case k when 0 then 'SHELL πρατήριο Ρίου' when 1 then 'EKO βενζίνη Πατρών'
+                                 when 2 then 'AVIN καύσιμα Αθήνας' else 'BP πρατήριο καυσίμων Αιγίου' end
+      when 'φαρμακείο' then case k when 0 then 'Φαρμακείο Παπαδοπούλου' when 1 then 'Φαρμακείο Κέντρου'
+                                   when 2 then 'Διαγνωστικό κέντρο Υγεία' else 'Οδοντίατρος Κ. Λάμπρου' end
+      when 'εστιατόριο' then case k when 0 then 'Ταβέρνα Ο Μπάμπης' when 1 then 'Ψητοπωλείο Το Κάρβουνο'
+                                    when 2 then 'Pizza Fan πιτσαρία Πάτρα' else 'Καφέ Μπουκάλι καφετέρια' end
+      when 'ηλεκτρονικό κατάστημα' then case k when 0 then 'Skroutz.gr ηλεκτρονική παραγγελία' when 1 then 'Public.gr βιβλία'
+                                               when 2 then 'Κωτσόβολος ηλεκτρικές συσκευές' else 'e-shop.gr υπολογιστές' end
+      when 'ρούχα' then case k when 0 then 'ZARA ρούχα' when 1 then 'HM Hennes ένδυση'
+                               when 2 then 'Intersport αθλητικά είδη' else 'Υποδήματα Βογιατζής παπούτσια' end
+      when 'αεροπορικά' then case k when 0 then 'AEGEAN αεροπορικά εισιτήρια' when 1 then 'Ryanair πτήση'
+                                    when 2 then 'Blue Star Ferries εισιτήριο πλοίου' else 'Booking.com ξενοδοχείο' end
+      else p_kind end;
+  end;
+
   function money(p_from number, p_to number) return number is
   begin
     return round(dbms_random.value(p_from, p_to), 2);
@@ -295,6 +318,23 @@ begin
         exception when others then refused;
         end;
       end if;
+      -- the bills of the month from the e-banking (the accounts with a salary): the power every month, the water every
+      -- other month, the mobile, a subscription or two (amounts of their own: no random draw)
+      if salary(j) > 0 and to_number(to_char(d, 'DD')) = 10 + mod(j, 5) then
+        for b_ in (select 'ΔΕΗ λογαριασμός ρεύματος' w, 38 + mod(j * 7 + to_number(to_char(d, 'MM')) * 11, 70) a, 1 ok from dual
+                   union all select 'ΕΥΔΑΠ λογαριασμός νερού', 18 + mod(j * 5, 25), mod(to_number(to_char(d, 'MM')), 2) from dual
+                   union all select 'COSMOTE κινητή τηλεφωνία', 25 + mod(j * 3, 20), case when mod(j, 3) = 0 then 1 else 0 end from dual
+                   union all select 'Vodafone internet σπιτιού', 32, case when mod(j, 3) = 1 then 1 else 0 end from dual
+                   union all select 'Netflix συνδρομή ταινιών', 11.99, case when mod(j, 4) = 0 then 1 else 0 end from dual
+                   union all select 'Spotify συνδρομή μουσικής', 10.99, case when mod(j, 5) = 0 then 1 else 0 end from dual) loop
+          if b_.ok = 1 and available(acc(j)) >= b_.a + 50 then
+            begin
+              e := bk_core.transfer_out(acc(j), b_.a, 'GR9608100010000001234567890', rtrim(b_.w), p_channel => 'WEB');
+            exception when others then refused;
+            end;
+          end if;
+        end loop;
+      end if;
       -- now and then: a withdrawal (mostly from an ATM), a card payment, a deposit, a transfer to another
       -- account of the bank
       if dbms_random.value < 0.08 then
@@ -316,8 +356,9 @@ begin
         if available(acc(j)) >= amt then
           begin
             e := bk_core.transfer_out(acc(j), amt, 'GR9608100010000001234567890',
-                                      'Πληρωμή με κάρτα: ' || case trunc(dbms_random.value(0, 5)) when 0 then 'σούπερ μάρκετ'
+                                      'Πληρωμή με κάρτα: ' || shop(case trunc(dbms_random.value(0, 5)) when 0 then 'σούπερ μάρκετ'
                                         when 1 then 'καύσιμα' when 2 then 'φαρμακείο' when 3 then 'εστιατόριο' else 'ηλεκτρονικό κατάστημα' end,
+                                        j + to_number(to_char(d, 'DDD'))),
                                       p_channel => 'WEB');
           exception when others then refused;
           end;
@@ -350,8 +391,9 @@ begin
                    case n when 1 then 'USD' when 2 then 'GBP' when 3 then 'CHF' else 'JPY' end);
           else
             e := bk_core.cc_purchase(cck(j), money(8, 250),
-                   case trunc(dbms_random.value(0, 6)) when 0 then 'σούπερ μάρκετ' when 1 then 'καύσιμα'
-                     when 2 then 'ηλεκτρονικό κατάστημα' when 3 then 'εστιατόριο' when 4 then 'ρούχα' else 'αεροπορικά' end);
+                   shop(case trunc(dbms_random.value(0, 6)) when 0 then 'σούπερ μάρκετ' when 1 then 'καύσιμα'
+                     when 2 then 'ηλεκτρονικό κατάστημα' when 3 then 'εστιατόριο' when 4 then 'ρούχα' else 'αεροπορικά' end,
+                     j + to_number(to_char(d, 'DDD'))));
           end if;
         exception when others then refused;
         end;

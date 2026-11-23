@@ -169,7 +169,7 @@ $('logout').addEventListener('click', () => logout(false));
 // the menu: an accordion of groups, one open at a time (the group of the page open by itself)
 const MENU = [
   { key: 'customers', title: '👥 Πελάτες', items: [['customers', 'Αναζήτηση'], ['customers/new', 'Νέος πελάτης']] },
-  { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['move', 'Νέα κίνηση'], ['loans', 'Δάνεια']] },
+  { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['search', 'Αναζήτηση με το νόημα'], ['move', 'Νέα κίνηση'], ['loans', 'Δάνεια']] },
   { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'],
     ['fx', 'Νομίσματα και ισοτιμίες'], ['branches', 'Υποκαταστήματα'], ['atms', 'ATM'], ['day', 'Ημέρα και κλείσιμο']] },
   { key: 'ai', title: '🤖 Ύποπτες κινήσεις', role: 'MANAGER', items: [['ai', 'Ειδοποιήσεις και μοντέλο']] },
@@ -233,7 +233,7 @@ async function route() {
   const m = $('main');
   m.replaceChildren(h('p', { class: 'muted' }, 'Φόρτωση…'));
   try {
-    const f = { customers, customer, accounts, account, move, entry, loans, loan, rules, products, fx, branches, atms, day, ai, users }[page] || customers;
+    const f = { customers, customer, accounts, account, move, entry, loans, loan, rules, products, fx, branches, atms, day, ai, search, users }[page] || customers;
     const el = await f(id, extra);
     m.replaceChildren(el);
   } catch (e) {
@@ -409,15 +409,84 @@ async function account(id, tab) {
       kv('Επιτόκιο τώρα', num(a.rate_now) + ' %'),
       kv('Τόκοι', a.day_basis + ', κεφαλαιοποίηση ανά ' + CAP[a.cap_every] + ', φόρος ' + num(a.tax_rate) + ' %')),
     actions));
-  const tabs = [['statement', 'Καρτέλα'], ['interest', 'Τόκοι'], ['limits', 'Όρια και κανόνες'], ['holders', 'Δικαιούχοι'], ['cards', 'Κάρτες']];
+  const tabs = [['statement', 'Καρτέλα'], ['interest', 'Τόκοι'], ['spending', 'Έξοδα ανά κατηγορία'], ['limits', 'Όρια και κανόνες'],
+    ['holders', 'Δικαιούχοι'], ['cards', 'Κάρτες']];
   const cur = tab || 'statement';
   box.append(h('div', { class: 'tabs' }, tabs.map(([k, v]) => h('button', { class: k === cur ? 'on' : null,
     onclick: () => { location.hash = '#/account/' + id + '/' + k; } }, v))));
   const body = h('div', { class: 'card' });
   box.append(body);
-  const f = { statement: statementTab, interest: interestTab, limits: limitsTab, holders: holdersTab, cards: cardsTab }[cur] || statementTab;
+  const f = { statement: statementTab, interest: interestTab, spending: spendingTab, limits: limitsTab, holders: holdersTab,
+    cards: cardsTab }[cur] || statementTab;
   body.append(await f(a));
   return box;
+}
+
+// ---- the search by meaning (db/BK_VECTOR.sql: AI Vector Search in the database)
+function hitsTable(rows, withAccount) {
+  return table(['Ημέρα'].concat(withAccount ? ['Λογαριασμός', 'Δικαιούχος'] : [], ['Περιγραφή', '#Χρέωση', '#Πίστωση', '#Ομοιότητα', 'Κατηγορία']),
+    rows.map((x) => h('tr', null, td(date(x.book_date)),
+      withAccount ? td(h('a', { href: '#/account/' + x.account_id }, iban(x.iban)), 'mono') : null, withAccount ? td(x.holder) : null,
+      td(h('a', { href: '#/entry/' + x.entry_id }, x.descr || KINDS[x.kind] || x.kind)),
+      tdn(x.debit ? amt(x.debit, x.currency) : ''), tdn(x.credit ? amt(x.credit, x.currency) : ''),
+      tdn(num(x.similarity, 3)), td(h('span', { class: 'chip' }, x.category || '')))));
+}
+
+// a search box: a question in own words; the category of it, and all the movements of that category
+function searchBox(account, withAccount) {
+  const q = h('input', { type: 'search', class: 'wide', placeholder: 'π.χ. φαγητό έξω, βενζίνη, ρεύμα και νερό, συνδρομές, fuel' });
+  const out = h('div');
+  async function run(category) {
+    const v = q.value.trim();
+    if (!v && !category) return;
+    out.replaceChildren(h('p', { class: 'muted' }, 'Αναζήτηση…'));
+    try {
+      const r = await api('ai/search?limit=200&q=' + encodeURIComponent(v) + (account ? '&account=' + account : '')
+        + (category ? '&category=' + category : ''));
+      const c = r.category || {};
+      // the texts found, each once: how near, how many movements
+      const texts = new Map();
+      for (const x of r.rows) {
+        const k = (x.descr || '').replace(/^(Αγορά|Πληρωμή με κάρτα): /, '');
+        const t = texts.get(k) || { sim: x.similarity, n: 0 };
+        t.n += 1;
+        texts.set(k, t);
+      }
+      out.replaceChildren(
+        h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Βρέθηκαν:'), [...texts].map(([k, t]) =>
+          h('span', { class: 'chip' }, k + ' · ' + num(t.sim, 3) + ' · ' + t.n))),
+        h('div', { class: 'row' }, h('span', { class: 'muted' }, category ? 'Όλες οι κινήσεις της κατηγορίας' : 'Η ερώτηση μοιάζει με την κατηγορία'),
+          h('span', { class: 'chip' }, c.name || '—'),
+          !category && c.code ? h('button', { onclick: () => run(c.code) }, 'Όλες οι κινήσεις της') : null,
+          h('span', { class: 'muted' }, r.rows.length + ' κινήσεις')),
+        r.rows.length ? hitsTable(r.rows, withAccount) : h('p', { class: 'muted' }, 'Τίποτα κοντά σε αυτό.'));
+    } catch (e) { out.replaceChildren(h('p', { class: 'bad' }, e.message)); }
+  }
+  q.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') run(); });
+  const chips = h('div', { class: 'row' }, ['φαγητό έξω', 'βενζινάδικο', 'ρεύμα και νερό', 'ταινίες', 'γιατροί και φάρμακα', 'fuel']
+    .map((w) => h('button', { onclick: () => { q.value = w; run(); } }, w)));
+  return h('div', null, h('div', { class: 'row' }, q, h('button', { class: 'primary', onclick: () => run() }, 'Αναζήτηση')), chips, out);
+}
+
+async function search() {
+  const m = await api('ai/model').catch(() => null);
+  return h('div', { class: 'card' }, h('h2', null, 'Αναζήτηση με το νόημα'),
+    h('p', { class: 'muted' }, 'Γράψε τι ψάχνεις με δικά σου λόγια. Ένα μοντέλο embeddings μέσα στη βάση (multilingual-e5-small, ONNX) κάνει την ερώτηση και κάθε περιγραφή κίνησης ένα διάνυσμα 384 αριθμών· η βάση βρίσκει τα πιο κοντινά (VECTOR_DISTANCE). Έτσι το «φαγητό έξω» βρίσκει «Ταβέρνα Ο Μπάμπης» και «Pizza Fan πιτσαρία», χωρίς κοινή λέξη, και το «fuel» το «SHELL πρατήριο Ρίου».'),
+    m && m.vec_info ? h('p', { class: 'muted' }, m.vec_info) : null,
+    searchBox(null, true));
+}
+
+// the tab of an account: what it spent in 12 months by category (the categories: the nearest in meaning to each text)
+async function spendingTab(a) {
+  const rows = await api('ai/spending?account=' + a.id);
+  const max = Math.max(1, ...rows.map((r) => r.amount));
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  return h('div', null, h('h3', null, 'Έξοδα 12 μηνών ανά κατηγορία'),
+    rows.length ? table(['Κατηγορία', '#Ποσό (€)', '#%', '', '#Κινήσεις'], rows.map((r) => h('tr', null, td(r.name), tdn(money(r.amount)),
+      tdn(num(100 * r.amount / total, 1)),
+      td((() => { const b = h('div', { class: 'bar' }); b.style.width = Math.max(2, Math.round(200 * r.amount / max)) + 'px'; return b; })()),
+      tdn(r.movements)))) : h('p', { class: 'muted' }, 'Καμία χρέωση τους τελευταίους 12 μήνες (ή δεν υπάρχει μοντέλο embeddings).'),
+    h('h3', null, 'Αναζήτηση με το νόημα στις κινήσεις του'), searchBox(a.id, false));
 }
 
 function period(load, days) {

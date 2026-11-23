@@ -11,3 +11,7 @@ target/
 *.mmx
 *.err
 __pycache__/
+
+# the models of AI: downloaded and made by ai/mk_embed_model.sh, never in the repo
+ai/models/
+ai/.venv/

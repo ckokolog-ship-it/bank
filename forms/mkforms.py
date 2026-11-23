@@ -549,6 +549,38 @@ FORMS['BK_AI'] = dict(
          ('TRAIN', 'button', 342, 546, 260, 'Εκπαίδευση μοντέλου', {'role': 'ADMIN'}),
          ('X_MODEL', 'display', 10, 596, 900, 'Το μοντέλο', {'len': 300})])
 
+# the search by meaning (db/BK_VECTOR.sql, AI Vector Search): a question in own words (Enter), of an account or
+# of all; the movements nearest in meaning (BK_AI_HIT: bk_vec.fill_hits), the category of the question and all its
+# movements; below, what the account spent in 12 months by category
+FORMS['BK_SEARCH'] = dict(
+    title='Αναζήτηση με το νόημα',
+    blocks=[dict(name='HIT', table='BK_AI_HIT', order='seq', top=TOP, rows=12, read_only=True,
+                 cols=[C('SEQ', '', 0, num=True, hidden=True),
+                       C('ACCOUNT_ID', '', 0, num=True, hidden=True),
+                       C('BOOK_DATE', 'Ημέρα', 80, date=True),
+                       C('IBAN', 'Λογαριασμός', 200, len=34),
+                       C('HOLDER', 'Δικαιούχος', 140, len=200),
+                       C('DESCR', 'Περιγραφή', 260, len=200),
+                       C('DEBIT', 'Χρέωση', 86, num=True, mask=MONEY),
+                       C('CREDIT', 'Πίστωση', 86, num=True, mask=MONEY),
+                       C('CURRENCY', 'Νόμ.', 36, len=3),
+                       C('SIMILARITY', 'Ομοιότητα', 64, num=True, mask='0D000'),
+                       C('CATEGORY', 'Κατηγορία', 150, len=60)]),
+            dict(name='SPEND', table='BK_AI_SPEND12_V', order='amount desc', top=TOP + 12 * ROW_H + 40, rows=6,
+                 read_only=True, where='account_id = -1',
+                 cols=[C('NAME', 'Κατηγορία (12 μήνες του λογαριασμού)', 260, len=60),
+                       C('AMOUNT', 'Έξοδα (€)', 110, num=True, mask=MONEY),
+                       C('MOVEMENTS', 'Κινήσεις', 70, num=True)])],
+    ctl=[('Q', 'text', 10, 572, 420, 'Τι ψάχνεις, με δικά σου λόγια (Enter)', {'len': 500, 'enter': True}),
+         ('S_ACC_TEXT', 'text', 436, 572, 300, 'Λογαριασμός (λίστα· κενό: όλοι)', {'len': 200, 'lov': 'LOV_SACC'}),
+         ('S_ACC_ID', 'hidden', 0, 0, 0, '', {'num': True}),
+         ('SEARCH', 'button', 742, 570, 140, 'Αναζήτηση', {}),
+         ('X_CAT', 'display', 10, 620, 420, 'Η κατηγορία της ερώτησης', {'len': 100}),
+         ('X_CAT_CODE', 'hidden', 0, 0, 0, '', {'len': 4}),
+         ('CATALL', 'button', 436, 618, 300, 'Όλες οι κινήσεις της κατηγορίας', {}),
+         ('X_MODEL', 'display', 10, 668, 870, 'Το μοντέλο', {'len': 300})],
+    lovs=[('LOV_SACC', 'Λογαριασμοί', ACCOUNTS_LOV, [('ID', 0, 'Κωδ.', 'CTL.S_ACC_ID'), ('TEXT', 380, 'Λογαριασμός', 'CTL.S_ACC_TEXT')])])
+
 # the currencies (BK_CURRENCY_V: the last rate of each) and the rates of the one on the screen below, the newest
 # first; a rate from a day on, a currency new or changed, active or not (MANAGER); an amount converted (anyone)
 FORMS['BK_FX'] = dict(
@@ -653,13 +685,13 @@ FORMS['BK_LOGIN'] = dict(
 FORM_ROLES = {'BK_LOGIN': None, 'BK_MAIN': 'TELLER', 'BK_CUSTOMERS': 'TELLER', 'BK_ACCOUNTS': 'TELLER',
               'BK_MOVE': 'TELLER', 'BK_DAY': 'TELLER', 'BK_RULES': 'TELLER', 'BK_PRODUCTS': 'TELLER',
               'BK_CARDS': 'TELLER', 'BK_CCARDS': 'TELLER', 'BK_LOANS': 'TELLER', 'BK_FX': 'TELLER', 'BK_BRANCHES': 'TELLER', 'BK_ATMS': 'TELLER', 'BK_USERS': 'ADMIN',
-              'BK_AI': 'MANAGER'}
+              'BK_AI': 'MANAGER', 'BK_SEARCH': 'TELLER'}
 
 # the first menu: a button for each form (NEW_FORM), the business day, the logout, the exit
 MENU_FORMS = [('BK_CUSTOMERS', 'Πελάτες'), ('BK_ACCOUNTS', 'Λογαριασμοί'), ('BK_MOVE', 'Κίνηση'),
               ('BK_CARDS', 'Κάρτες'), ('BK_CCARDS', 'Πιστωτικές κάρτες'), ('BK_LOANS', 'Δάνεια'), ('BK_RULES', 'Κανόνες κινήσεων'), ('BK_PRODUCTS', 'Προϊόντα και επιτόκια'),
               ('BK_FX', 'Νομίσματα και ισοτιμίες'), ('BK_BRANCHES', 'Υποκαταστήματα'),
-              ('BK_ATMS', 'ATM'), ('BK_DAY', 'Ημέρα και κλείσιμο'), ('BK_AI', 'Ύποπτες κινήσεις'), ('BK_USERS', 'Χρήστες')]
+              ('BK_ATMS', 'ATM'), ('BK_DAY', 'Ημέρα και κλείσιμο'), ('BK_AI', 'Ύποπτες κινήσεις'), ('BK_SEARCH', 'Αναζήτηση με το νόημα'), ('BK_USERS', 'Χρήστες')]
 FORMS['BK_MAIN'] = dict(
     title='Bank',
     blocks=[],
@@ -691,7 +723,8 @@ MENU_BAR = [
                          ('CCARDS', 'Πιστωτικές κάρτες', "new_form('BK_CCARDS');"),
                          ('LOANS', 'Δάνεια', "new_form('BK_LOANS');"),
                          ('DAY', 'Ημέρα και κλείσιμο', "new_form('BK_DAY');"),
-                         ('AI', 'Ύποπτες κινήσεις', "new_form('BK_AI');")]),
+                         ('AI', 'Ύποπτες κινήσεις', "new_form('BK_AI');"),
+                         ('SEARCH', 'Αναζήτηση με το νόημα', "new_form('BK_SEARCH');")]),
     ('SETUP', 'Ρυθμίσεις', [('RULES', 'Κανόνες κινήσεων', "new_form('BK_RULES');"),
                             ('PRODUCTS', 'Προϊόντα και επιτόκια', "new_form('BK_PRODUCTS');"),
                             ('FX', 'Νομίσματα και ισοτιμίες', "new_form('BK_FX');"),

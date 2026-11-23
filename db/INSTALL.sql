@@ -56,6 +56,8 @@ prompt == the rows of the reports (BK_REPORT)
 @BK_REPORT.sql
 prompt == the suspicious movements (BK_AI: Oracle Machine Learning)
 @BK_AI.sql
+prompt == the search by meaning (BK_VECTOR: AI Vector Search)
+@BK_VECTOR.sql
 prompt == the words of the forms (BK_TEXT)
 @BK_TEXT.sql
 set define on
@@ -66,9 +68,9 @@ whenever sqlerror exit failure rollback
 declare
   n number;
 begin
-  select count(*) into n from user_errors where name in ('BK_AUTH', 'BK_TEXT', 'BK_REPORT', 'BK_AI');
+  select count(*) into n from user_errors where name in ('BK_AUTH', 'BK_TEXT', 'BK_REPORT', 'BK_AI', 'BK_VEC');
   if n > 0 then
-    raise_application_error(-20002, 'BK_AUTH, BK_TEXT, BK_REPORT or BK_AI: ' || n || ' errors (show errors)');
+    raise_application_error(-20002, 'BK_AUTH, BK_TEXT, BK_REPORT, BK_AI or BK_VEC: ' || n || ' errors (show errors)');
   end if;
 end;
 /
@@ -76,5 +78,9 @@ prompt == &demo_file
 @&demo_file
 prompt == &ai_demo_file
 @&ai_demo_file
+prompt == the model of embeddings (LOAD_EMBED.sql)
+whenever sqlerror continue
+@LOAD_EMBED.sql
+whenever sqlerror exit failure rollback
 prompt == BANK INSTALL OK
 exit
