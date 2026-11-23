@@ -12,6 +12,10 @@
 -- The language model: the settings AI_LLM_URL (http://localhost:11434/api/generate), AI_LLM_MODEL (gemma3:4b),
 -- AI_LLM_TIMEOUT (300 seconds: "transfer_timeout" of UTL_TO_GENERATE_TEXT); the database may call it (an ACL: GRANT_AI.sql). Without it (not running, no ACL):
 -- the answer says so, and the pieces found are there all the same.
+-- How much the model reads and writes (on a CPU the time of an answer is mostly its reading of the pieces):
+-- AI_RAG_FACTS (2) and AI_RAG_DOCS (2) the pieces of each kind, AI_RAG_CHARS (600) the characters of each,
+-- AI_LLM_MAX_TOKENS (200) the answer at most, AI_LLM_CTX (2048) its context, AI_LLM_KEEP_ALIVE (24h) the model kept
+-- loaded by Ollama between the questions.
 create table if not exists bk_ai_doc (
   id      number generated always as identity constraint bk_ai_doc_pk primary key,
   source  varchar2(100) not null,           -- DB:... (the facts) or the file
@@ -48,7 +52,8 @@ create or replace package bk_rag as
   -- the knowledge again: the facts of the bank, the guides of BK_DOCS, their vectors; the pieces back
   function refresh(p_dir varchar2 default 'BK_DOCS') return number;
   -- a question: its answer (and its sources: BK_AI_QUESTION_SRC); the id of it back
-  function ask(p_question varchar2, p_k number default 6) return number;
+  -- (p_k: the pieces, half facts and half guides; null: AI_RAG_FACTS and AI_RAG_DOCS)
+  function ask(p_question varchar2, p_k number default null) return number;
   -- the facts of the bank in Greek sentences (refresh puts them in BK_AI_DOC): how many
   function facts return number;
   -- the assistant in a line: the model, the pieces of knowledge
@@ -189,7 +194,9 @@ create or replace package body bk_rag as
     return n + 1;
   end;
 
-  -- a guide of the repo in pieces, each with the heading above it
+  -- a guide of the repo in pieces: each section of it (a heading #, ##, ###; not a # in a block of code) one piece
+  -- with its heading, a long one cut by DBMS_VECTOR.UTL_TO_CHUNKS (by words), each part with the same heading (pieces
+  -- cut through the sections lost the sentence asked about, or had the heading of the section before)
   function load_file(p_dir varchar2, p_file varchar2) return number is
     c clob;
     f bfile := bfilename(p_dir, p_file);
@@ -198,7 +205,33 @@ create or replace package body bk_rag as
     ctx integer := dbms_lob.default_lang_ctx;
     warn integer;
     n number := 0;
-    h varchar2(300);
+    pos integer := 1;
+    nl integer;
+    len integer;
+    line varchar2(4000);
+    title varchar2(300);
+    buf varchar2(32767);
+    fence boolean := false;
+
+    procedure flush is
+    begin
+      -- (a heading with nothing under it: not a piece)
+      if buf is null or length(trim(buf)) - length(nvl(title, '')) < 40 then
+        return;
+      end if;
+      if regexp_count(buf, '[^[:space:]]+') <= 110 then
+        add_(p_file, title, substr(buf, 1, 4000));
+        n := n + 1;
+      else
+        for x in (select jt.data
+                  from table(dbms_vector.utl_to_chunks(to_clob(buf),
+                         json('{"by":"words","max":"90","overlap":"10","split":"recursively","normalize":"all"}'))) k,
+                       json_table(k.column_value, '$' columns (data varchar2(4000) path '$.chunk_data')) jt) loop
+          add_(p_file, title, x.data);
+          n := n + 1;
+        end loop;
+      end if;
+    end;
   begin
     if dbms_lob.fileexists(f) = 0 then
       return 0;
@@ -207,25 +240,29 @@ create or replace package body bk_rag as
     dbms_lob.fileopen(f, dbms_lob.file_readonly);
     dbms_lob.loadclobfromfile(c, f, dbms_lob.lobmaxsize, dst, src, nls_charset_id('AL32UTF8'), ctx, warn);
     dbms_lob.fileclose(f);
-    for x in (select jt.off, jt.data
-              from table(dbms_vector.utl_to_chunks(c, json('{"by":"words","max":"160","overlap":"16","split":"recursively","normalize":"all"}'))) k,
-                   json_table(k.column_value, '$' columns (off number path '$.chunk_offset', data varchar2(4000) path '$.chunk_data')) jt) loop
-      -- the heading above the piece
-      h := null;
-      declare
-        p integer := 1;
-        q integer;
-      begin
-        loop
-          q := dbms_lob.instr(c, chr(10) || '#', p);
-          exit when q = 0 or q > x.off;
-          h := dbms_lob.substr(c, least(200, greatest(1, nvl(nullif(dbms_lob.instr(c, chr(10), q + 1), 0), q + 200) - q - 1)), q + 1);
-          p := q + 1;
-        end loop;
-      end;
-      add_(p_file, trim(ltrim(nvl(h, dbms_lob.substr(c, greatest(1, least(150, dbms_lob.instr(c, chr(10)) - 1)), 1)), '# ')), x.data);
-      n := n + 1;
+    len := dbms_lob.getlength(c);
+    while pos <= len loop
+      nl := dbms_lob.instr(c, chr(10), pos);
+      if nl = 0 then
+        nl := len + 1;
+      end if;
+      line := dbms_lob.substr(c, least(nl - pos, 4000), pos);
+      pos := nl + 1;
+      if line like '```%' then
+        fence := not fence;
+      end if;
+      if not fence and regexp_like(line, '^#{1,4} ') then
+        flush;
+        title := substr(trim(ltrim(line, '# ')), 1, 300);
+        buf := line || chr(10);
+      elsif length(buf) + length(line) < 32000 then
+        buf := buf || line || chr(10);
+      else
+        flush;
+        buf := line || chr(10);
+      end if;
     end loop;
+    flush;
     dbms_lob.freetemporary(c);
     return n;
   exception
@@ -308,7 +345,7 @@ create or replace package body bk_rag as
            || t || '.';
   end;
 
-  function ask(p_question varchar2, p_k number default 6) return number is
+  function ask(p_question varchar2, p_k number default null) return number is
     v vector(384, float32);
     qid number;
     prompt clob;
@@ -316,6 +353,9 @@ create or replace package body bk_rag as
     k number := 0;
     t0 timestamp := systimestamp;
     model varchar2(60) := setting('AI_LLM_MODEL', 'gemma3:4b');
+    nf number := nvl(ceil(p_k / 2), to_number(setting('AI_RAG_FACTS', '2')));
+    nd number := nvl(floor(p_k / 2), to_number(setting('AI_RAG_DOCS', '2')));
+    chars number := to_number(setting('AI_RAG_CHARS', '600'));
     err varchar2(1000);
     calc varchar2(4000) := rate_calc(p_question);
   begin
@@ -345,19 +385,19 @@ create or replace package body bk_rag as
     for d in (select * from (
                 select id, source, title, text, round(1 - vector_distance(vec, v, cosine), 4) sim, 0 o
                 from bk_ai_doc where vec is not null and source like 'DB:%'
-                order by vector_distance(vec, v, cosine) fetch first ceil(nvl(p_k, 6) / 2) rows only)
+                order by vector_distance(vec, v, cosine) fetch first nf rows only)
               union all
               select * from (
                 select id, source, title, text, round(1 - vector_distance(vec, v, cosine), 4) sim, 1 o
                 from bk_ai_doc where vec is not null and source not like 'DB:%'
-                order by vector_distance(vec, v, cosine) fetch first floor(nvl(p_k, 6) / 2) rows only)
+                order by vector_distance(vec, v, cosine) fetch first nd rows only)
               order by o, sim desc) loop
       k := k + 1;
       insert into bk_ai_question_src (question_id, n, doc_id, source, title, text, similarity)
       values (qid, k, d.id, d.source, d.title, d.text, d.sim);
-      -- (each piece at most 700 characters: the model reads all of it before it writes, on the CPU that is most of the
+      -- (each piece at most AI_RAG_CHARS: the model reads all of it before it writes, on the CPU that is most of the
       -- time of an answer)
-      prompt := prompt || '[' || k || '] ' || d.title || ': ' || substr(d.text, 1, 700) || chr(10) || chr(10);
+      prompt := prompt || '[' || k || '] ' || d.title || ': ' || substr(d.text, 1, chars) || chr(10) || chr(10);
     end loop;
     prompt := prompt || 'Ερώτηση: ' || trim(p_question) || chr(10) || 'Απάντηση:';
     begin
@@ -366,7 +406,10 @@ create or replace package body bk_rag as
       ans := dbms_vector.utl_to_generate_text(prompt,
                json('{"provider":"ollama","host":"local","url":"' || setting('AI_LLM_URL', 'http://localhost:11434/api/generate')
                     || '","model":"' || model || '","transfer_timeout":'
-                    || to_number(setting('AI_LLM_TIMEOUT', '300')) || '}'));
+                    || to_number(setting('AI_LLM_TIMEOUT', '300')) || ',"keep_alive":"' || setting('AI_LLM_KEEP_ALIVE', '24h')
+                    -- (these to Ollama as they are: the answer at most, its context, a little of chance)
+                    || '","options":{"num_predict":' || to_number(setting('AI_LLM_MAX_TOKENS', '200'))
+                    || ',"num_ctx":' || to_number(setting('AI_LLM_CTX', '2048')) || ',"temperature":0.2}}'));
     exception
       when others then
         -- all of it (the first line alone said only "HTTP request failed")
