@@ -449,3 +449,17 @@ def test_the_search_by_meaning(base, conn):
     assert call(base, '/api/ai/search', token=tok(base, 'tst-teller'))[0] == 400
     s = ok(base, '/api/ai/spending?account=%d' % a['id'])
     assert [(x['category'], x['amount']) for x in s] == [('FOOD', 25)]
+
+
+def test_the_assistant(base, conn):
+    """/api/ai/ask (anyone logged in): the answer or its error, the sources; the questions and the knowledge (M)"""
+    if conn.cursor().execute('select bk_vec.ready from dual').fetchone()[0] != 'Y':
+        pytest.skip('no model BK_EMBED: ai/mk_embed_model.sh, db/LOAD_EMBED.sql')
+    r = ok(base, '/api/ai/ask', {'question': 'Πόσο κοστίζει μια ανάληψη στο γκισέ;'})
+    assert r['question'] and r['asked_by'] == 'tst-teller' and len(r['sources']) == 6
+    assert r['answer'] or r['error']
+    assert all(s['text'] and s['similarity'] > 0 for s in r['sources'])
+    assert call(base, '/api/ai/ask', {}, tok(base, 'tst-teller'))[0] == 400
+    assert call(base, '/api/ai/questions', token=tok(base, 'tst-teller'))[0] == 403
+    assert ok(base, '/api/ai/questions?limit=5', who='tst-manager')[0]['id'] == r['id']
+    assert ok(base, '/api/ai/knowledge', {}, who='tst-manager')['pieces'] > 10

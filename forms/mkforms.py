@@ -581,6 +581,27 @@ FORMS['BK_SEARCH'] = dict(
          ('X_MODEL', 'display', 10, 668, 870, 'Το μοντέλο', {'len': 300})],
     lovs=[('LOV_SACC', 'Λογαριασμοί', ACCOUNTS_LOV, [('ID', 0, 'Κωδ.', 'CTL.S_ACC_ID'), ('TEXT', 380, 'Λογαριασμός', 'CTL.S_ACC_TEXT')])])
 
+# the assistant of the teller (db/BK_RAG.sql: RAG, a local LLM): a question in Greek (Enter); the answer from the
+# pieces of knowledge nearest to it (the facts of the bank, the guides), with their numbers; the pieces below; the
+# knowledge again (MANAGER: the products or the rules changed)
+FORMS['BK_ASSIST'] = dict(
+    title='Βοηθός ταμία',
+    blocks=[dict(name='SRC', table='BK_AI_QUESTION_SRC', order='n', top=360, rows=6, read_only=True,
+                 where='question_id = -1',
+                 cols=[C('N', 'Αρ.', 30, num=True),
+                       C('SOURCE', 'Πηγή', 150, len=100),
+                       C('TITLE', 'Ενότητα', 230, len=300),
+                       C('SIMILARITY', 'Ομοιότητα', 64, num=True, mask='0D000'),
+                       C('TEXT', 'Το απόσπασμα', 440, len=4000)])],
+    ctl=[('Q', 'text', 10, 40, 760, 'Η ερώτηση (Enter), π.χ. Πόσα μπορεί να σηκώσει ένας πελάτης από ATM την ημέρα;',
+          {'len': 1000, 'enter': True}),
+         ('ASK', 'button', 776, 38, 140, 'Ρώτα', {}),
+         ('Q_ID', 'hidden', 0, 0, 0, '', {'num': True}),
+         ('X_ANSWER', 'text', 10, 96, 906, 'Η απάντηση (οι αριθμοί σε αγκύλες: τα αποσπάσματα από κάτω)', {'len': 4000, 'lines': 9}),
+         ('X_TIME', 'display', 10, 322, 500, '', {'len': 200}),
+         ('KNOW', 'button', 716, 320, 200, 'Ανανέωση γνώσης', {'role': 'MANAGER'}),
+         ('X_INFO', 'display', 10, 520, 906, 'Ο βοηθός', {'len': 300})])
+
 # the currencies (BK_CURRENCY_V: the last rate of each) and the rates of the one on the screen below, the newest
 # first; a rate from a day on, a currency new or changed, active or not (MANAGER); an amount converted (anyone)
 FORMS['BK_FX'] = dict(
@@ -685,13 +706,13 @@ FORMS['BK_LOGIN'] = dict(
 FORM_ROLES = {'BK_LOGIN': None, 'BK_MAIN': 'TELLER', 'BK_CUSTOMERS': 'TELLER', 'BK_ACCOUNTS': 'TELLER',
               'BK_MOVE': 'TELLER', 'BK_DAY': 'TELLER', 'BK_RULES': 'TELLER', 'BK_PRODUCTS': 'TELLER',
               'BK_CARDS': 'TELLER', 'BK_CCARDS': 'TELLER', 'BK_LOANS': 'TELLER', 'BK_FX': 'TELLER', 'BK_BRANCHES': 'TELLER', 'BK_ATMS': 'TELLER', 'BK_USERS': 'ADMIN',
-              'BK_AI': 'MANAGER', 'BK_SEARCH': 'TELLER'}
+              'BK_AI': 'MANAGER', 'BK_SEARCH': 'TELLER', 'BK_ASSIST': 'TELLER'}
 
 # the first menu: a button for each form (NEW_FORM), the business day, the logout, the exit
 MENU_FORMS = [('BK_CUSTOMERS', 'Πελάτες'), ('BK_ACCOUNTS', 'Λογαριασμοί'), ('BK_MOVE', 'Κίνηση'),
               ('BK_CARDS', 'Κάρτες'), ('BK_CCARDS', 'Πιστωτικές κάρτες'), ('BK_LOANS', 'Δάνεια'), ('BK_RULES', 'Κανόνες κινήσεων'), ('BK_PRODUCTS', 'Προϊόντα και επιτόκια'),
               ('BK_FX', 'Νομίσματα και ισοτιμίες'), ('BK_BRANCHES', 'Υποκαταστήματα'),
-              ('BK_ATMS', 'ATM'), ('BK_DAY', 'Ημέρα και κλείσιμο'), ('BK_AI', 'Ύποπτες κινήσεις'), ('BK_SEARCH', 'Αναζήτηση με το νόημα'), ('BK_USERS', 'Χρήστες')]
+              ('BK_ATMS', 'ATM'), ('BK_DAY', 'Ημέρα και κλείσιμο'), ('BK_AI', 'Ύποπτες κινήσεις'), ('BK_SEARCH', 'Αναζήτηση με το νόημα'), ('BK_ASSIST', 'Βοηθός ταμία'), ('BK_USERS', 'Χρήστες')]
 FORMS['BK_MAIN'] = dict(
     title='Bank',
     blocks=[],
@@ -724,7 +745,8 @@ MENU_BAR = [
                          ('LOANS', 'Δάνεια', "new_form('BK_LOANS');"),
                          ('DAY', 'Ημέρα και κλείσιμο', "new_form('BK_DAY');"),
                          ('AI', 'Ύποπτες κινήσεις', "new_form('BK_AI');"),
-                         ('SEARCH', 'Αναζήτηση με το νόημα', "new_form('BK_SEARCH');")]),
+                         ('SEARCH', 'Αναζήτηση με το νόημα', "new_form('BK_SEARCH');"),
+                         ('ASSIST', 'Βοηθός ταμία', "new_form('BK_ASSIST');")]),
     ('SETUP', 'Ρυθμίσεις', [('RULES', 'Κανόνες κινήσεων', "new_form('BK_RULES');"),
                             ('PRODUCTS', 'Προϊόντα και επιτόκια', "new_form('BK_PRODUCTS');"),
                             ('FX', 'Νομίσματα και ισοτιμίες', "new_form('BK_FX');"),
@@ -931,7 +953,8 @@ def lov_xml(lovs, texts):
 
 def ctl_item(c, say):
     """an item of the block CTL: (name, kind, x, y, width, text, options)
-       kind: button (its label), text / date / secret (a prompt on its left), display, hidden"""
+       kind: button (its label), text / date / secret (a prompt on its left), display, hidden;
+       lines: n, a text item of n lines (wrapped, a scroll bar)"""
     name, kind, x, y, w, text, o = c
     a = dict(Name=name)
     if kind == 'button':
@@ -966,6 +989,9 @@ def ctl_item(c, say):
         a['ValidateFromList'] = 'false'
     if o.get('enter'):
         a['_enter'] = True             # Enter here: ui.press of this item (KEY-NEXT-ITEM; the cursor stays)
+    if o.get('lines'):
+        # a text of many lines (an answer): wrapped at the words, a scroll bar
+        a.update(Height=ROW_H * o['lines'], MultiLine='true', WrapStyle='Word', ShowVerticalScrollbar='true')
     return a
 
 
@@ -1007,7 +1033,7 @@ def build(name, f):
     for c in f.get('ctl', []):
         if c[1] != 'hidden':
             width = max(width, c[2] + c[4] + 10)
-            height = max(height, c[3] + 40)
+            height = max(height, c[3] + ROW_H * c[6].get('lines', 1) + 40)
 
     lovs = ([('LOV_FIND', f['find_title'], f['find'][0],
               [(n, w, t, 'CTL.' + r if r else None) for n, w, t, r in f['find'][1]])] if 'find' in f else []) \

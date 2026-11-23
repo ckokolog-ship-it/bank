@@ -1,4 +1,4 @@
--- LOAD_EMBED.sql -- the model of embeddings (BK_EMBED, for the search by meaning: BK_VECTOR.sql) into the
+-- LOAD_EMBED.sql -- (and the knowledge of the assistant: BK_RAG.sql, the guides from BK_DOCS) the model of embeddings (BK_EMBED, for the search by meaning: BK_VECTOR.sql) into the
 -- database, from the directory BK_MODELS (GRANT_AI.sql, as SYSTEM) and its file bk_embed.onnx (ai/mk_embed_model.sh),
 -- then the texts of all the movements with their vectors. INSTALL.sql runs it at its end: the model there, only the
 -- texts of the new movements; no directory or no file, it says so (the rest of the bank works without it).
@@ -20,6 +20,8 @@ begin
     n := bk_vec.refresh;
     commit;
     dbms_output.put_line('== BK_EMBED: in the database; ' || n || ' new texts');
+    n := bk_rag.refresh;
+    dbms_output.put_line('== the knowledge of the assistant (BK_RAG): ' || n || ' pieces');
     return;
   end if;
   select count(*) into d from all_directories where directory_name = 'BK_MODELS';
@@ -29,6 +31,8 @@ begin
   end if;
   n := bk_vec.load_model;
   dbms_output.put_line('== BK_EMBED loaded: ' || n || ' texts of the movements with their vector');
+  n := bk_rag.refresh;
+  dbms_output.put_line('== the knowledge of the assistant (BK_RAG): ' || n || ' pieces');
 exception
   when others then
     dbms_output.put_line('== ' || sqlerrm);

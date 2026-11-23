@@ -2,6 +2,10 @@
 --   sqlplus bank/<password>@FREEPDB1 @UNINSTALL.sql
 set feedback off
 whenever sqlerror continue
+drop package if exists bk_rag;
+drop table if exists bk_ai_question_src purge;
+drop table if exists bk_ai_question purge;
+drop table if exists bk_ai_doc purge;
 drop package if exists bk_vec;
 begin
   dbms_vector.drop_onnx_model('BK_EMBED', true);

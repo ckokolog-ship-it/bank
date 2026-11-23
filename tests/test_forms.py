@@ -903,3 +903,28 @@ def test_the_search_by_meaning(cur):
     run(cur, "ui.press('CTL.CATALL');", CTL__X_CAT_CODE='FUEL', CTL__X_CAT='Καύσιμα και αυτοκίνητο',
         CTL__S_ACC_ID=str(a), CTL__S_ACC_TEXT='x')
     assert 'Καύσιμα και αυτοκίνητο: 1 κινήσεις' in msgs(cur)
+
+
+@needs_db
+def test_the_assistant(cur):
+    """BK_ASSIST: a question (Enter or the button): its answer, or why there is none, and its pieces below"""
+    if cur.execute('select bk_vec.ready from dual').fetchone()[0] != 'Y':
+        pytest.skip('no model BK_EMBED: ai/mk_embed_model.sh, db/LOAD_EMBED.sql')
+    compile_ui(cur, 'BK_ASSIST')
+    run(cur, 'ui.init;')
+    assert 'κομμάτια' in item(cur, 'CTL.X_INFO')
+    assert 'ερώτηση' in fails(cur, "ui.press('CTL.ASK');", CTL__Q='')
+    old = cur.execute("select max(value) from bk_setting where name = 'AI_LLM_URL'").fetchone()[0]
+    try:
+        cur.execute("delete from bk_setting where name = 'AI_LLM_URL'")
+        cur.execute("insert into bk_setting (name, value) values ('AI_LLM_URL', 'http://127.0.0.1:9/api/generate')")
+        cur.connection.commit()
+        run(cur, "ui.press('CTL.Q');", CTL__Q='Πόσο κοστίζει μια ανάληψη στο γκισέ;')
+        q = item(cur, 'CTL.Q_ID')
+        assert q and 'SRC:question_id = %s;' % q in queries(cur)
+        assert item(cur, 'CTL.X_ANSWER').startswith('Το γλωσσικό μοντέλο δεν απάντησε')
+    finally:
+        cur.execute("delete from bk_setting where name = 'AI_LLM_URL'")
+        if old:
+            cur.execute("insert into bk_setting (name, value) values ('AI_LLM_URL', :v)", v=old)
+        cur.connection.commit()

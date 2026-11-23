@@ -222,6 +222,8 @@ PACKAGE BODY ui IS
       day_refresh;
     ELSIF c_form = 'BK_LOANS' THEN
       copy('Ίδια δόση, λιγότερες δόσεις', 'CTL.P_MODE_TEXT');
+    ELSIF c_form = 'BK_ASSIST' THEN
+      copy(bk_rag.info, 'CTL.X_INFO');
     ELSIF c_form = 'BK_SEARCH' THEN
       copy(bk_vec.model_info, 'CTL.X_MODEL');
     ELSIF c_form = 'BK_AI' THEN
@@ -311,6 +313,7 @@ PACKAGE BODY ui IS
     w2 VARCHAR2(200);
     w3 VARCHAR2(400);
     d DATE;
+    ans VARCHAR2(4000);              -- (the answer of the assistant)
   BEGIN
     IF p_item IN ('CTL.LOGIN', 'CTL.L_PW') THEN
       BEGIN
@@ -789,6 +792,29 @@ PACKAGE BODY ui IS
       END IF;
       open_report('BK_BR_CASH', '&P_KIND=B&P_ACCOUNT=' || to_number(k) || '&P_FROM='
                   || to_char(date_in('CTL.P_FROM'), 'DD/MM/YYYY') || '&P_TO=' || to_char(date_in('CTL.P_TO'), 'DD/MM/YYYY'));
+    -- BK_ASSIST: a question; its answer (the language model: some seconds), its pieces below; the knowledge again
+    ELSIF p_item = 'CTL.ASK' OR (p_item = 'CTL.Q' AND c_form = 'BK_ASSIST') THEN
+      IF name_in('CTL.Q') IS NULL THEN
+        fail('Γράψε μια ερώτηση');
+      END IF;
+      id_ := bk_rag.ask(name_in('CTL.Q'));
+      SELECT dbms_lob.substr(answer, 1900, 1), substr(error, 1, 190), ms, model INTO ans, w1, e, t
+      FROM bk_ai_question WHERE id = id_;
+      copy(to_char(id_), 'CTL.Q_ID');
+      IF ans IS NULL THEN
+        ans := 'Το γλωσσικό μοντέλο δεν απάντησε (' || w1 || '). Τα αποσπάσματα που βρέθηκαν είναι από κάτω.';
+      END IF;
+      copy(ans, 'CTL.X_ANSWER');
+      copy(t || ', ' || to_char(round(e / 1000, 1)) || ' δευτερόλεπτα', 'CTL.X_TIME');
+      set_block_property('SRC', DEFAULT_WHERE, 'question_id = ' || to_char(id_));
+      go_block('SRC');
+      execute_query;
+      go_item('CTL.Q');
+    ELSIF p_item = 'CTL.KNOW' THEN
+      e := bk_rag.refresh;
+      copy(bk_rag.info, 'CTL.X_INFO');
+      message('Η γνώση του βοηθού: ' || e || ' κομμάτια');
+
     -- BK_SEARCH: the movements nearest in meaning to the question (of the account, or all); its category; all the
     -- movements of that category; what the account spent by category
     ELSIF p_item IN ('CTL.SEARCH', 'CTL.Q', 'CTL.CATALL') THEN

@@ -58,6 +58,8 @@ prompt == the suspicious movements (BK_AI: Oracle Machine Learning)
 @BK_AI.sql
 prompt == the search by meaning (BK_VECTOR: AI Vector Search)
 @BK_VECTOR.sql
+prompt == the assistant of the teller (BK_RAG: RAG with a local LLM)
+@BK_RAG.sql
 prompt == the words of the forms (BK_TEXT)
 @BK_TEXT.sql
 set define on
@@ -68,9 +70,9 @@ whenever sqlerror exit failure rollback
 declare
   n number;
 begin
-  select count(*) into n from user_errors where name in ('BK_AUTH', 'BK_TEXT', 'BK_REPORT', 'BK_AI', 'BK_VEC');
+  select count(*) into n from user_errors where name in ('BK_AUTH', 'BK_TEXT', 'BK_REPORT', 'BK_AI', 'BK_VEC', 'BK_RAG');
   if n > 0 then
-    raise_application_error(-20002, 'BK_AUTH, BK_TEXT, BK_REPORT, BK_AI or BK_VEC: ' || n || ' errors (show errors)');
+    raise_application_error(-20002, 'BK_AUTH, BK_TEXT, BK_REPORT, BK_AI, BK_VEC or BK_RAG: ' || n || ' errors (show errors)');
   end if;
 end;
 /
