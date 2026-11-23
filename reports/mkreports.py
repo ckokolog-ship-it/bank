@@ -34,8 +34,10 @@ LEFT = 0.4
 BODY_Y, BODY_H = 1.35, 9.55
 FOOT_Y = BODY_Y + BODY_H + 0.1
 ROW_H = 0.17
-FONT, SIZE = 'Arial', 8          # (uifont.ali of the Reports Server: Arial -> a TrueType with Greek; on forms1
-                                 #  DejaVu Sans, by pdf_fonts.sh)
+# Helvetica: a face the Reports of Linux has (Arial it has not: rwconverter put Symbol in its place, and so "GR" became
+# "ΓΡ" in HTML and the Greek symbols in PDF); in PDF a TrueType with Greek in its place by uifont.ali (DejaVu Sans:
+# pdf_fonts.sh on forms1; on Windows Helvetica -> Arial)
+FONT, SIZE = 'Helvetica', 8
 
 # the columns: (item, x in the body, width, alignment); the heading of the page has the same x + LEFT
 COLS = [('LDATE', 0.00, 0.72, 'start'), ('DOC_TEXT', 0.75, 0.72, 'start'), ('DESCR', 1.50, 2.55, 'start'),
@@ -170,7 +172,7 @@ def build(name, r):
     # the heading: the title, the period, the page; the headings of the columns; from the carry-over
     out.append(field('F_TITLE', 'CF_TITLE', LEFT, 0.30, 5.6, h=0.24, bold=True, size=12))
     out.append(field('F_PERIOD', 'CF_PERIOD', LEFT, 0.58, 5.0, h=0.2, size=9))
-    out.append(field('F_L_PAGE', formula_name('PAGE'), LEFT + 5.9, 0.30, 0.6, h=0.2, align='end', size=9))
+    out.append(field('F_L_PAGE', formula_name('PAGE'), LEFT + 5.6, 0.30, 0.9, h=0.2, align='end', size=9))
     out.append(field('F_PAGE', 'PageNumber', LEFT + 6.55, 0.30, 0.6, h=0.2, size=9))
     for c, lb in (('LDATE', 'DATE'), ('DOC_TEXT', 'DOC'), ('DESCR', 'DESCR'), ('DEBIT', 'DEBIT'),
                   ('CREDIT', 'CREDIT'), ('BALANCE', 'BALANCE')):
