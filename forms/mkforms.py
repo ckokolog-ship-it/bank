@@ -14,6 +14,8 @@ build_forms.sh on the Forms server, forms1). The same way as the forms of the mi
   BK_RULES      the rules of the movements: a rule set (new or changed) or removed (MANAGER)
   BK_PRODUCTS   the products (a manager corrects them) and their rates; a new rate from the business day on
   BK_CARDS      the debit cards: a new one, a new PIN (shown once), blocked; again active, cancelled (MANAGER)
+  BK_LOANS      the loans and their schedule; a new one, its installment first (MANAGER), what pays it off today,
+                a prepayment and a payoff (MANAGER), its schedule printed (BK_LN_SCHEDULE)
   BK_FX         the currencies, their rates by day; a new rate, a currency (MANAGER); an amount converted
   BK_CCARDS     the credit cards: limit, owed, held, available, their statements; the limit (MANAGER), a payment,
                 a purchase (a test), a statement printed; a new card for a customer with its PIN (MANAGER)
@@ -400,6 +402,66 @@ FORMS['BK_CCARDS'] = dict(
            [('CODE', 70, 'Προϊόν', 'CTL.N_PRODUCT'), ('NAME', 220, 'Όνομα', None)]),
           currency_lov('LOV_QCUR', 'CTL.Q_CURRENCY')])
 
+# the loans (BK_LOAN_V): the loan on the screen, its schedule below; a new one (MANAGER: paid to an account of the
+# bank, its customer the primary holder of it; its installment first: "Δόση"), what pays it off today, a prepayment
+# (MANAGER: the same installment and fewer, or a smaller one), paid off (MANAGER), its schedule printed
+LOAN_PAY_LOV = ("select a.id, a.iban || ' ' || a.holder || ' ' || a.currency text from bk_account_v a, bk_product p "
+                "where a.status = 'O' and p.code = a.product and p.kind not in ('CC', 'LN') order by a.id")
+PREPAY_MODES = (('T', 'Ίδια δόση, λιγότερες δόσεις'), ('P', 'Ίδιοι μήνες, μικρότερη δόση'))
+FORMS['BK_LOANS'] = dict(
+    title='Δάνεια',
+    find_title='Δάνεια', find=("select id, iban || ' ' || holder text, product from bk_loan_v order by id",
+                              [('ID', 0, 'Κωδ.', 'FIND_ID'), ('TEXT', 380, 'Δάνειο · δικαιούχος', 'FIND_TEXT'),
+                               ('PRODUCT', 60, 'Προϊόν', None)]),
+    blocks=[dict(name='LN', table='BK_LOAN_V', order='id', top=TOP, rows=6, read_only=True,
+                 cols=[C('ID', '', 0, num=True, hidden=True),
+                       C('IBAN', 'Λογαριασμός δανείου', 220, len=27),
+                       C('PRODUCT', 'Προϊόν', 50, len=10),
+                       C('HOLDER', 'Δικαιούχος', 150, len=100),
+                       C('CURRENCY', 'Νόμ.', 40, len=3),
+                       C('STATUS', 'Κατ.', 36, len=1),
+                       C('PRINCIPAL', 'Κεφάλαιο', 96, num=True, mask=MONEY),
+                       C('MONTHS', 'Μήνες', 46, num=True),
+                       C('RATE', 'Επιτ. %', 60, num=True, mask=MONEY4),
+                       C('OWED', 'Οφειλή', 96, num=True, mask=MONEY),
+                       C('NEXT_DUE', 'Επόμ. δόση', 84, date=True),
+                       C('LATE', 'Καθυστ.', 50, num=True)]),
+            dict(name='SCH', table='BK_LN_SCHEDULE', order='n', top=TOP + 6 * ROW_H + 40, rows=10, read_only=True,
+                 where='account_id = :LN.ID',
+                 cols=[C('N', 'Δόση', 40, num=True),
+                       C('DUE_DATE', 'Λήξη', 84, date=True),
+                       C('RATE', 'Επιτ. %', 60, num=True, mask=MONEY4),
+                       C('PRINCIPAL', 'Κεφάλαιο', 90, num=True, mask=MONEY),
+                       C('INTEREST', 'Τόκος', 80, num=True, mask=MONEY),
+                       C('PAYMENT', 'Δόση', 90, num=True, mask=MONEY),
+                       C('BALANCE', 'Υπόλοιπο', 100, num=True, mask=MONEY),
+                       C('STATUS', 'Κατ.', 36, len=1),
+                       C('PAID', 'Πληρώθηκαν', 90, num=True, mask=MONEY),
+                       C('PAID_ON', 'Στις', 84, date=True),
+                       C('LATE_FEE', 'Τέλος', 66, num=True, mask=MONEY),
+                       C('LATE_BOOKED', 'Τόκοι υπερ.', 76, num=True, mask=MONEY)])],
+    ctl=[('PAYOFF', 'button', 10, 580, 200, 'Ποσό εξόφλησης σήμερα', {}),
+         ('X_PAYOFF', 'display', 216, 582, 160, '', {'len': 40}),
+         ('PRINTSCH', 'button', 382, 580, 260, 'Εκτύπωση προγράμματος', {}),
+         ('P_AMOUNT', 'text', 10, 632, 110, 'Πρόωρη εξόφληση: ποσό', {'num': True}),
+         ('P_MODE', 'text', 126, 632, 40, 'Τρόπος (λίστα)', {'len': 1, 'upper': True, 'lov': 'LOV_PMODE', 'init': 'T'}),
+         ('P_MODE_TEXT', 'display', 172, 632, 220, '', {'len': 60}),
+         ('PREPAY', 'button', 398, 630, 180, 'Πρόωρη εξόφληση', {'role': 'MANAGER'}),
+         ('PAYALL', 'button', 584, 630, 180, 'Ολική εξόφληση', {'role': 'MANAGER'}),
+         ('N_PAY_TEXT', 'text', 10, 684, 330, 'Νέο δάνειο: λογαριασμός του πελάτη (λίστα)', {'len': 200, 'lov': 'LOV_LPAY'}),
+         ('N_PAY_ID', 'hidden', 0, 0, 0, '', {'num': True}),
+         ('N_PRODUCT', 'text', 346, 684, 70, 'Προϊόν (λίστα)', {'len': 10, 'upper': True, 'lov': 'LOV_LNPROD', 'init': 'CONS'}),
+         ('N_AMOUNT', 'text', 422, 684, 100, 'Ποσό', {'num': True}),
+         ('N_MONTHS', 'text', 528, 684, 60, 'Μήνες', {'num': True}),
+         ('N_DAY', 'text', 594, 684, 60, 'Ημ. δόσης', {'num': True}),
+         ('QUOTE', 'button', 660, 682, 100, 'Δόση', {}),
+         ('NEWLOAN', 'button', 766, 682, 150, 'Νέο δάνειο', {'role': 'MANAGER'}),
+         ('N_RESULT', 'display', 10, 734, 900, 'Αποτέλεσμα', {'len': 300})],
+    lovs=[('LOV_LPAY', 'Λογαριασμοί', LOAN_PAY_LOV, [('ID', 0, 'Κωδ.', 'CTL.N_PAY_ID'), ('TEXT', 400, 'Λογαριασμός', 'CTL.N_PAY_TEXT')]),
+          ('LOV_LNPROD', 'Προϊόντα δανείων', "select code, name from bk_product where kind = 'LN' and active = 'Y' order by id",
+           [('CODE', 70, 'Προϊόν', 'CTL.N_PRODUCT'), ('NAME', 260, 'Όνομα', None)]),
+          words_lov('LOV_PMODE', 'Πρόωρη εξόφληση', PREPAY_MODES, 'CTL.P_MODE', 'CTL.P_MODE_TEXT', w=240)])
+
 # the currencies (BK_CURRENCY_V: the last rate of each) and the rates of the one on the screen below, the newest
 # first; a rate from a day on, a currency new or changed, active or not (MANAGER); an amount converted (anyone)
 FORMS['BK_FX'] = dict(
@@ -497,11 +559,11 @@ FORMS['BK_LOGIN'] = dict(
 # the role each form needs (ui.session_ok: TELLER < MANAGER < ADMIN); None: the login itself
 FORM_ROLES = {'BK_LOGIN': None, 'BK_MAIN': 'TELLER', 'BK_CUSTOMERS': 'TELLER', 'BK_ACCOUNTS': 'TELLER',
               'BK_MOVE': 'TELLER', 'BK_DAY': 'TELLER', 'BK_RULES': 'TELLER', 'BK_PRODUCTS': 'TELLER',
-              'BK_CARDS': 'TELLER', 'BK_CCARDS': 'TELLER', 'BK_FX': 'TELLER', 'BK_ATMS': 'TELLER', 'BK_USERS': 'ADMIN'}
+              'BK_CARDS': 'TELLER', 'BK_CCARDS': 'TELLER', 'BK_LOANS': 'TELLER', 'BK_FX': 'TELLER', 'BK_ATMS': 'TELLER', 'BK_USERS': 'ADMIN'}
 
 # the first menu: a button for each form (NEW_FORM), the business day, the logout, the exit
 MENU_FORMS = [('BK_CUSTOMERS', 'Πελάτες'), ('BK_ACCOUNTS', 'Λογαριασμοί'), ('BK_MOVE', 'Κίνηση'),
-              ('BK_CARDS', 'Κάρτες'), ('BK_CCARDS', 'Πιστωτικές κάρτες'), ('BK_RULES', 'Κανόνες κινήσεων'), ('BK_PRODUCTS', 'Προϊόντα και επιτόκια'),
+              ('BK_CARDS', 'Κάρτες'), ('BK_CCARDS', 'Πιστωτικές κάρτες'), ('BK_LOANS', 'Δάνεια'), ('BK_RULES', 'Κανόνες κινήσεων'), ('BK_PRODUCTS', 'Προϊόντα και επιτόκια'),
               ('BK_FX', 'Νομίσματα και ισοτιμίες'),
               ('BK_ATMS', 'ATM'), ('BK_DAY', 'Ημέρα και κλείσιμο'), ('BK_USERS', 'Χρήστες')]
 FORMS['BK_MAIN'] = dict(
@@ -533,6 +595,7 @@ MENU_BAR = [
                          ('MOVE', 'Κίνηση', "new_form('BK_MOVE');"),
                          ('CARDS', 'Κάρτες', "new_form('BK_CARDS');"),
                          ('CCARDS', 'Πιστωτικές κάρτες', "new_form('BK_CCARDS');"),
+                         ('LOANS', 'Δάνεια', "new_form('BK_LOANS');"),
                          ('DAY', 'Ημέρα και κλείσιμο', "new_form('BK_DAY');")]),
     ('SETUP', 'Ρυθμίσεις', [('RULES', 'Κανόνες κινήσεων', "new_form('BK_RULES');"),
                             ('PRODUCTS', 'Προϊόντα και επιτόκια', "new_form('BK_PRODUCTS');"),

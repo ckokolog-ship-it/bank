@@ -177,3 +177,28 @@ def test_the_statement_of_a_credit_card(db):
     assert t[1].startswith('Κίνηση πιστωτικής κάρτας ') and t[2] == 'Οφειλή'
     assert db.one("select bk_report.period('S', :a, :f, :t) from dual", a=a, f=s[0], t=s[1])[0] == \
         'Διάστημα: %s - %s' % (s[0].strftime('%d/%m/%Y'), s[1].strftime('%d/%m/%Y'))
+
+
+@pytest.mark.skipif(not DSN, reason='BANK_DSN not set')
+def test_the_schedule_of_a_loan(db):
+    """its installments: the interest as debit, the principal as credit, the balance the principal left (from its
+    principal before them); under the title its principal, months, rate and day"""
+    from test_core import customer
+    c = customer(db)
+    p = db.fn('open_account', int, 'TC1', c, 0)
+    a = db.fn('ln_open', int, 'CONS', c, 6000, 12, p, 10)
+    db.conn.commit()
+    d0, end = db.one('select min(due_date), max(due_date) from bk_ln_schedule where account_id = :a', a=a)
+    rs = rows(db, 'L', a, d0 - 40 * DAY, end)
+    assert len(rs) == 12 and rs[0]['prior_balance'] == 6000 and rs[-1]['balance'] == 0
+    assert sum(r['credit'] for r in rs) == pytest.approx(6000, abs=1e-9)
+    assert rs[0]['debit'] == round(6000 * 9.5 / 1200, 2) and rs[0]['doc_text'] == 'Δόση 1' and 'θα έρθει' in rs[0]['descr']
+    # from its 4th: before them the principal of the first three paid
+    s3 = db.one('select balance from bk_ln_schedule where account_id = :a and n = 3', a=a)[0]
+    rs = rows(db, 'L', a, rs[3]['ldate'], end)
+    assert rs[0]['prior_balance'] == s3 and len(rs) == 9
+    t = db.one("select bk_report.period('L', :a, null, null), bk_report.title('L', :a), bk_report.label('CREDIT', 'L') from dual", a=a)
+    assert t[0].startswith('Κεφάλαιο 6.000,00 € σε 12 μήνες') and 'σταθερό επιτόκιο, τώρα 9,5%' in t[0] and 'δόση στις 10' in t[0]
+    assert t[1].startswith('Πρόγραμμα αποπληρωμής δανείου ') and t[2] == 'Κεφάλαιο'
+    with pytest.raises(Exception, match='BK-155'):
+        rows(db, 'L', p, d0, end)

@@ -197,6 +197,9 @@ create or replace package bk_core as
   function ln_prepay(p_account_id number, p_amount number, p_mode varchar2 default 'T') return number;
   -- what pays it off today: its principal, the interest of its days, the fee, what is due and not paid
   function ln_payoff(p_account_id number) return number;
+  -- the installment of a loan of a product (its rate today), before it is opened
+  function ln_quote(p_product_code varchar2, p_amount number, p_months number) return number;
+  function ln_rate(p_product_code varchar2) return number;
   -- the end of a day for the loans (close_day calls it): the installments due that day (their interest booked; a
   -- variable rate again, and the installments after it), collected from their account (as much as there is: again
   -- every day); late after GRACE_DAYS (the late fee), late interest each day on what is late (booked at the end
@@ -2333,6 +2336,25 @@ create or replace package body bk_core as
   begin
     select max(due_date) into d from bk_ln_schedule where account_id = p_account_id and status <> 'D';
     return greatest(open_day - nvl(d, loan_row(p_account_id).start_date), 0);
+  end;
+
+  function ln_rate(p_product_code varchar2) return number is
+    t bk_ln_product%rowtype;
+  begin
+    select x.* into t from bk_ln_product x join bk_product p on p.id = x.product_id where p.code = upper(p_product_code);
+    return case t.rate_type when 'V' then greatest(ln_index(t.index_code) + t.rate, 0) else t.rate end;
+  exception
+    when no_data_found then
+      fail(55, 'Το προϊόν ' || p_product_code || ' δεν είναι δανείου');
+  end;
+
+  function ln_quote(p_product_code varchar2, p_amount number, p_months number) return number is
+  begin
+    amount_ok(p_amount);
+    if nvl(p_months, 0) < 1 or p_months <> trunc(p_months) then
+      fail(56, 'Η διάρκεια του δανείου: από 1 μήνα');
+    end if;
+    return annuity(p_amount, ln_rate(p_product_code), p_months);
   end;
 
   function ln_payoff(p_account_id number) return number is
