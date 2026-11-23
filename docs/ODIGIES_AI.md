@@ -112,7 +112,9 @@ sudo -iu oracle bash -c 'cd ~/bank/db && sqlplus system@localhost:1521/FREEPDB1 
 
 1. **Το μοντέλο** `BK_EMBED` είναι το `intfloat/multilingual-e5-small` (Hugging Face, άδεια MIT). Είναι πολυγλωσσικό, ξέρει και ελληνικά, και βγάζει 384 διαστάσεις.
    - Το `ai/mk_embed_model.sh` το κατεβάζει και το κάνει **ένα αρχείο ONNX με τον tokenizer μέσα** (`ai/build_embed.py`), όπως το θέλει η Oracle. Ελέγχει ότι βγάζει τα ίδια vectors με το αρχικό μοντέλο.
+   - Ο πίνακας των λέξεων του μοντέλου (250.002 × 384, τα 4/5 του μεγέθους του) μπαίνει σε int8: το αρχείο γίνεται 178 MB αντί για 453, με τα ίδια vectors (συνημίτονο ≥ 0,9999). Όλο το μοντέλο σε int8 έβγαινε 112 MB, αλλά χάλαγε τις κατηγορίες (η πιτσαρία έπεφτε στους λογαριασμούς σπιτιού).
    - Η βάση το φορτώνει με `DBMS_VECTOR.LOAD_ONNX_MODEL` (`db/LOAD_EMBED.sql`).
+   - **Μνήμη:** κάθε session που φτιάχνει vector (αναζήτηση, βοηθός, κλείσιμο ημέρας) κρατά το μοντέλο στην PGA της, περίπου 280 MB, και πριν την κβάντιση 555. Στο Free όλες οι sessions μαζί έχουν όριο 2 GB (`PGA_AGGREGATE_LIMIT`). Γι' αυτό το bk-api κλείνει τις αδρανείς συνδέσεις του μετά από 2 λεπτά, και καθεμία μετά από 10 το πολύ, ώστε η μνήμη να επιστρέφει στη βάση.
 2. **Από κείμενο σε vector** με SQL: `VECTOR_EMBEDDING(bk_embed USING 'query: φαγητό έξω' AS data)`. Το e5 θέλει `query: ` μπροστά στην ερώτηση και `passage: ` μπροστά στο κείμενο που ψάχνεται· τα βάζει το `bk_vec`.
 3. **Τα κείμενα των κινήσεων** (`bk_ai_phrase`):
    - κάθε περιγραφή μία φορά, χωρίς «Αγορά: » και με τους αριθμούς ως `#`: το «Μισθοδοσία 11/2026» γίνεται «Μισθοδοσία #»·
@@ -150,7 +152,7 @@ sudo -iu oracle bash -c 'cd ~/bank/db && sqlplus system@localhost:1521/FREEPDB1 
 
 ```bash
 sudo -iu oracle git -C bank pull
-# το μοντέλο: κατεβαίνει από το Hugging Face και γίνεται ai/models/bk_embed.onnx (~450 MB, λίγα λεπτά)
+# το μοντέλο: κατεβαίνει από το Hugging Face και γίνεται ai/models/bk_embed.onnx (178 MB, λίγα λεπτά)
 sudo -iu oracle ~oracle/bank/ai/mk_embed_model.sh
 # το directory BK_MODELS (ai/models) και τα δικαιώματα· ζητά τον κωδικό του SYSTEM
 sudo -iu oracle bash -c 'cd ~/bank/db && sqlplus system@localhost:1521/FREEPDB1 @GRANT_AI.sql'
@@ -167,6 +169,7 @@ sudo -iu oracle bash -c 'cd ~/bank/db && sqlplus system@localhost:1521/FREEPDB1 
 |---|---|
 | `BK-174` | Το μοντέλο δεν φορτώθηκε από το directory: λείπει το αρχείο ή το δικαίωμα (`mk_embed_model.sh`, `GRANT_AI.sql`) |
 | `BK-175` | Δεν υπάρχει μοντέλο embeddings ακόμα: `LOAD_EMBED.sql` |
+| `ORA-04036` (PGA πάνω από `PGA_AGGREGATE_LIMIT`) | Πολλές sessions με το μοντέλο στη μνήμη τους. Χρειάζεται το μικρό αρχείο (178 MB: `mk_embed_model.sh`, μετά `@LOAD_EMBED.sql again`) και το νέο bk-api (`install_service.sh`). Ως SYSDBA, `show parameter pga` δείχνει το όριο |
 
 ## 7. Βήμα 3: Βοηθός ταμία (RAG)
 
