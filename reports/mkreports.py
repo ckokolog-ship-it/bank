@@ -34,7 +34,8 @@ LEFT = 0.4
 BODY_Y, BODY_H = 1.35, 9.55
 FOOT_Y = BODY_Y + BODY_H + 0.1
 ROW_H = 0.17
-FONT, SIZE = 'Arial', 8          # (uifont.ali of the Reports Server: Arial -> arial.ttf, with Greek)
+FONT, SIZE = 'Arial', 8          # (uifont.ali of the Reports Server: Arial -> a TrueType with Greek; on forms1
+                                 #  DejaVu Sans, by pdf_fonts.sh)
 
 # the columns: (item, x in the body, width, alignment); the heading of the page has the same x + LEFT
 COLS = [('LDATE', 0.00, 0.72, 'start'), ('DOC_TEXT', 0.75, 0.72, 'start'), ('DESCR', 1.50, 2.55, 'start'),
