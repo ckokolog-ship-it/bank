@@ -10,7 +10,7 @@
 -- form, the page: when the products or the rules changed).
 --
 -- The language model: the settings AI_LLM_URL (http://localhost:11434/api/generate), AI_LLM_MODEL (gemma3:4b),
--- AI_LLM_TIMEOUT (300 seconds); the database may call it (an ACL: GRANT_AI.sql). Without it (not running, no ACL):
+-- AI_LLM_TIMEOUT (300 seconds: "transfer_timeout" of UTL_TO_GENERATE_TEXT); the database may call it (an ACL: GRANT_AI.sql). Without it (not running, no ACL):
 -- the answer says so, and the pieces found are there all the same.
 create table if not exists bk_ai_doc (
   id      number generated always as identity constraint bk_ai_doc_pk primary key,
@@ -355,17 +355,22 @@ create or replace package body bk_rag as
       k := k + 1;
       insert into bk_ai_question_src (question_id, n, doc_id, source, title, text, similarity)
       values (qid, k, d.id, d.source, d.title, d.text, d.sim);
-      prompt := prompt || '[' || k || '] ' || d.title || ': ' || d.text || chr(10) || chr(10);
+      -- (each piece at most 700 characters: the model reads all of it before it writes, on the CPU that is most of the
+      -- time of an answer)
+      prompt := prompt || '[' || k || '] ' || d.title || ': ' || substr(d.text, 1, 700) || chr(10) || chr(10);
     end loop;
     prompt := prompt || 'Ερώτηση: ' || trim(p_question) || chr(10) || 'Απάντηση:';
     begin
-      utl_http.set_transfer_timeout(to_number(setting('AI_LLM_TIMEOUT', '300')));
+      -- (the time it may take: "transfer_timeout" in the parameters; UTL_HTTP.SET_TRANSFER_TIMEOUT it does not
+      -- read, and without it each call stopped at 60 seconds: ORA-29276 under an ORA-29273)
       ans := dbms_vector.utl_to_generate_text(prompt,
                json('{"provider":"ollama","host":"local","url":"' || setting('AI_LLM_URL', 'http://localhost:11434/api/generate')
-                    || '","model":"' || model || '"}'));
+                    || '","model":"' || model || '","transfer_timeout":'
+                    || to_number(setting('AI_LLM_TIMEOUT', '300')) || '}'));
     exception
       when others then
-        err := substr(sqlerrm, 1, 1000);
+        -- all of it (the first line alone said only "HTTP request failed")
+        err := substr(regexp_replace(dbms_utility.format_error_stack, 'ORA-06512[^' || chr(10) || ']*' || chr(10), ''), 1, 1000);
     end;
     update bk_ai_question
     set answer = ans, error = err,

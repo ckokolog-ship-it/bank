@@ -208,7 +208,7 @@ sudo -iu oracle bash -c 'cd ~/bank/db && sqlplus system@localhost:1521/FREEPDB1 
 |---|---|
 | `AI_LLM_URL` | `http://localhost:11434/api/generate` |
 | `AI_LLM_MODEL` | `gemma3:4b` |
-| `AI_LLM_TIMEOUT` | 300 δευτερόλεπτα |
+| `AI_LLM_TIMEOUT` | 300 δευτερόλεπτα: το `"transfer_timeout"` του `UTL_TO_GENERATE_TEXT`. Χωρίς αυτό η κλήση σταματά στα 60 δευτερόλεπτα (`ORA-29276`), και το `UTL_HTTP.SET_TRANSFER_TIMEOUT` δεν το αλλάζει |
 
 **Γιατί το gemma3:4b:** δοκίμασα και το Qwen 2.5 3B, που γράφει κακά ελληνικά («η πρωτεύουσα της Ελλάδας είναι η Ελληνική Πρωτεύουσα»). Το Gemma 3 4B γράφει σωστά ελληνικά και μένει στα αποσπάσματα. Με περισσότερη μνήμη, ένα μεγαλύτερο μοντέλο (π.χ. `gemma3:12b`) συλλογίζεται καλύτερα. Αρκεί να αλλάξεις το `AI_LLM_MODEL`.
 
@@ -239,7 +239,16 @@ sudo -iu oracle bash -c 'cd ~/bank/db && sqlplus system@localhost:1521/FREEPDB1 
 sudo -iu oracle bash -c 'cd ~/bank/db && export NLS_LANG=GREEK_GREECE.AL32UTF8 && sqlplus bank@localhost:1521/FREEPDB1 @INSTALL.sql demo'
 ```
 
-Στο τέλος το INSTALL πρέπει να γράφει `== the knowledge of the assistant (BK_RAG): ... pieces`. Χωρίς GPU, μια απάντηση θέλει 10–30 δευτερόλεπτα· εδώ, με 4 πυρήνες, ήθελε 10–25.
+Στο τέλος το INSTALL πρέπει να γράφει `== the knowledge of the assistant (BK_RAG): ... pieces`.
+
+**Ο χρόνος μιας απάντησης:** χωρίς GPU, ο περισσότερος χρόνος πάει στο να διαβάσει το μοντέλο τα αποσπάσματα· γι' αυτό καθένα μπαίνει στο prompt κομμένο στους 700 χαρακτήρες. Εδώ, με 4 πυρήνες, μια απάντηση ήθελε 10–25 δευτερόλεπτα. Στο forms1 μια σύντομη ερώτηση ήθελε 12 δευτερόλεπτα από το curl· μια ερώτηση του βοηθού θέλει παραπάνω. Η πρώτη μετά από διάλειμμα φορτώνει και το μοντέλο. Για να μένει φορτωμένο (το Ollama το ξεφορτώνει μετά από 5 λεπτά):
+
+```bash
+sudo systemctl edit ollama          # και γράψε:
+# [Service]
+# Environment="OLLAMA_KEEP_ALIVE=24h"
+sudo systemctl restart ollama
+```
 
 ### Λάθη
 
@@ -248,3 +257,4 @@ sudo -iu oracle bash -c 'cd ~/bank/db && export NLS_LANG=GREEK_GREECE.AL32UTF8 &
 | `BK-176` | Κενή ερώτηση |
 | `ORA-24247` στο «λάθος» της ερώτησης | Λείπει το ACL προς το Ollama: `GRANT_AI.sql` |
 | `ORA-29273` / `ORA-12541` | Δεν τρέχει το Ollama (`systemctl status ollama`) ή άλλη διεύθυνση (`AI_LLM_URL`) |
+| `ORA-29276: transfer timeout` | Η απάντηση άργησε περισσότερο από `AI_LLM_TIMEOUT` (300 δευτερόλεπτα) |
