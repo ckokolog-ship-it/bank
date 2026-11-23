@@ -34,6 +34,12 @@ import java.util.Map;
  *                                                base currency, and by currency) and their history
  *   POST /api/products/{code}/rates {valid_from, min_balance, rate, currency}   a rate from a day on (M)
  *   POST /api/products/{code}/currencies {currencies: "EUR,USD"}   the currencies it opens in (M)
+ *   GET  /api/loans?q=&status=                   the loans (A active, C paid off)
+ *   GET  /api/loans/quote?product=&amount=&months=   the installment of a loan before it is opened, the rate now
+ *   GET  /api/loans/{id}                         one: its schedule, what pays it off today
+ *   POST /api/loans {product, pay_account, amount, months, pay_day}   a new one, paid to that account (its IBAN or
+ *                                                number; the customer: its primary holder), its installments from it (M)
+ *   POST /api/loans/{id}/prepay {amount, mode T|P}   a prepayment (M)    POST /api/loans/{id}/payoff   paid off (M)
  *   GET  /api/fx                                 the currencies (the base one first), their last rate and its day
  *   GET  /api/fx/convert?amount=&from=&to=       an amount converted: at the mid rate, and as the customer gets it
  *   GET  /api/fx/{code}?days=                    its rates, the newest first
@@ -203,6 +209,9 @@ final class Api {
             }
             case "fx" -> {
                 return fx(c, u, get, p, q, in);
+            }
+            case "loans" -> {
+                return loans(c, u, get, p, q, in);
             }
             case "accounts" -> {
                 return accounts(c, u, get, p, q, in);
@@ -420,6 +429,87 @@ final class Api {
             return products(c, u, true, new String[]{"products"}, Map.of());
         }
         throw new Http.Fail(404, "not_found", "Δεν υπάρχει αυτή η κλήση");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    private static final String LOAN_COLS = "select id, iban, product, product_name, currency, status, principal, months, "
+            + "start_date, pay_day, rate, rate_type, owed, pay_account_id, pay_iban, principal_after, next_due, late, holder "
+            + "from bk_loan_v";
+
+    private Object loans(Connection c, Auth.User u, boolean get, String[] p, Map<String, String> q, Map<String, Object> in)
+            throws SQLException {
+        if (get && p.length == 1) {
+            String s = q.getOrDefault("q", "").trim();
+            String st = q.getOrDefault("status", "").trim().toUpperCase();
+            Object v = s.isEmpty() ? null : s;
+            Object vs = st.isEmpty() ? null : st;
+            return Db.rows(c, LOAN_COLS + " where (? is null or iban like '%' || replace(upper(?), ' ') || '%' or "
+                    + ai("holder") + " like '%' || " + ai("?") + " || '%') and (? is null or status = ?) order by id "
+                    + "fetch first 500 rows only", v, v, v, vs, vs);
+        }
+        if (get && is(p, "loans", "quote")) {
+            String prod = q.get("product");
+            if (prod == null || q.get("amount") == null || q.get("months") == null) {
+                throw new Http.Fail(400, "missing", "product, amount, months");
+            }
+            BigDecimal amount;
+            int months;
+            try {
+                amount = new BigDecimal(q.get("amount").replace(',', '.'));
+                months = Integer.parseInt(q.get("months").trim());
+            } catch (NumberFormatException e) {
+                throw new Http.Fail(400, "bad_number", "amount, months: numbers");
+            }
+            return Db.row(c, "select bk_core.ln_quote(?, ?, ?) payment, bk_core.ln_rate(?) rate from dual",
+                    prod, amount, months, prod);
+        }
+        if (!get && p.length == 1) {
+            need(u, "MANAGER");
+            long pay = toAccount(c, Http.text(in, "pay_account", true));
+            Map<String, Object> h = Db.row(c, "select customer_id from bk_holder where account_id = ? and role = 'P'", pay);
+            BigDecimal months = Http.decimal(in, "months", null);
+            long id = Db.fn(c, "bk_core.ln_open(p_product_code => ?, p_customer_id => ?, p_amount => ?, p_months => ?, "
+                    + "p_pay_account_id => ?, p_pay_day => ?)", Http.text(in, "product", true), h.get("customer_id"),
+                    Http.decimal(in, "amount", null), months, pay, Http.decimal(in, "pay_day", null));
+            return loan(c, id);
+        }
+        if (p.length < 2) {
+            throw new Http.Fail(404, "not_found", "Δεν υπάρχει αυτή η κλήση");
+        }
+        long id = Http.id(p[1]);
+        if (get && p.length == 2) {
+            return loan(c, id);
+        }
+        if (!get && is(p, "loans", "*", "prepay")) {
+            need(u, "MANAGER");
+            loan(c, id);
+            String mode = Http.text(in, "mode", false);
+            long e = Db.fn(c, "bk_core.ln_prepay(?, ?, ?)", id, Http.decimal(in, "amount", null),
+                    mode == null ? "T" : mode.toUpperCase());
+            Map<String, Object> r = loan(c, id);
+            r.put("entry_id", e);
+            return r;
+        }
+        if (!get && is(p, "loans", "*", "payoff")) {
+            need(u, "MANAGER");
+            loan(c, id);
+            long e = Db.fn(c, "bk_core.ln_prepay(?, bk_core.ln_payoff(?))", id, id);
+            Map<String, Object> r = loan(c, id);
+            r.put("entry_id", e);
+            return r;
+        }
+        throw new Http.Fail(404, "not_found", "Δεν υπάρχει αυτή η κλήση");
+    }
+
+    private static Map<String, Object> loan(Connection c, long id) throws SQLException {
+        Map<String, Object> r = Db.row(c, LOAN_COLS + " where id = ?", id);
+        if (r == null) {
+            throw new Http.Fail(404, "not_found", "Δεν υπάρχει δάνειο " + id);
+        }
+        r.put("payoff", Db.row(c, "select bk_core.ln_payoff(?) v from dual", id).get("v"));
+        r.put("schedule", Db.rows(c, "select n, due_date, rate, principal, interest, payment, balance, status, paid, "
+                + "paid_on, late_fee, late_booked from bk_ln_schedule where account_id = ? order by n", id));
+        return r;
     }
 
     // ---------------------------------------------------------------------------------------------

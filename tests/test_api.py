@@ -348,3 +348,29 @@ def test_the_currencies(base):
     assert p['currencies'].startswith('EUR') and 'USD' in p['rates_by_currency']
     assert {x['currency'] for x in p['rates']} >= {'EUR', 'USD'}
     assert call(base, '/api/products/CUR/currencies', {'currencies': 'EUR,EUR'}, tok(base, 'tst-manager'))[1]['error'] == 'BK-153'
+
+
+def test_the_loans(base):
+    """its installment first, a new one (M: paid to an account of the customer), the list, one with its schedule
+    and what pays it off, a prepayment (M), paid off (M)"""
+    q = ok(base, '/api/loans/quote?product=CONS&amount=12000&months=24')
+    r = q['rate'] / 1200
+    assert q['payment'] == round(12000 * r / (1 - (1 + r) ** -24), 2)
+    assert call(base, '/api/loans/quote?product=CUR&amount=1&months=2', token=tok(base, 'tst-teller'))[1]['error'] == 'BK-155'
+    p = open_account(base, 500)
+    body = {'product': 'CONS', 'pay_account': p['iban'], 'amount': 12000, 'months': 24, 'pay_day': 10}
+    assert call(base, '/api/loans', body, tok(base, 'tst-teller'))[0] == 403
+    loan = ok(base, '/api/loans', body, 'tst-manager')
+    assert loan['owed'] == 12000 and len(loan['schedule']) == 24 and loan['schedule'][0]['payment'] == q['payment']
+    assert loan['pay_account_id'] == p['id'] and loan['payoff'] >= 12000
+    assert ok(base, '/api/accounts/%d' % p['id'])['balance'] == 12500
+    assert ok(base, '/api/accounts/%d' % loan['id'])['kind'] == 'LN'
+    assert loan['id'] in [x['id'] for x in ok(base, '/api/loans?q=' + loan['iban'][-6:])]
+    s, e = call(base, '/api/loans', dict(body, months=500), tok(base, 'tst-manager'))
+    assert s == 400 and e['error'] == 'BK-156'
+    assert call(base, '/api/loans/%d/prepay' % loan['id'], {'amount': 100}, tok(base, 'tst-teller'))[0] == 403
+    after = ok(base, '/api/loans/%d/prepay' % loan['id'], {'amount': 2000, 'mode': 'T'}, 'tst-manager')
+    assert after['entry_id'] > 0 and sum(1 for x in after['schedule'] if x['status'] == 'D') < 24
+    done = ok(base, '/api/loans/%d/payoff' % loan['id'], {}, 'tst-manager')
+    assert done['status'] == 'C' and done['payoff'] == 0 and done['owed'] == 0
+    assert call(base, '/api/loans/%d' % p['id'], token=tok(base, 'tst-teller'))[0] == 404

@@ -168,12 +168,12 @@ $('logout').addEventListener('click', () => logout(false));
 // the menu: an accordion of groups, one open at a time (the group of the page open by itself)
 const MENU = [
   { key: 'customers', title: '👥 Πελάτες', items: [['customers', 'Αναζήτηση'], ['customers/new', 'Νέος πελάτης']] },
-  { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['move', 'Νέα κίνηση']] },
+  { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['move', 'Νέα κίνηση'], ['loans', 'Δάνεια']] },
   { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'],
     ['fx', 'Νομίσματα και ισοτιμίες'], ['atms', 'ATM'], ['day', 'Ημέρα και κλείσιμο']] },
   { key: 'admin', title: '🔐 Διαχείριση', role: 'ADMIN', items: [['users', 'Χρήστες']] }];
 // the item of the menu of a page (a customer: of the customers, an account or an entry: of the accounts)
-const MENU_OF = { customer: 'customers', account: 'accounts', entry: 'accounts' };
+const MENU_OF = { customer: 'customers', account: 'accounts', entry: 'accounts', loan: 'loans' };
 
 function nav() {
   const n = $('nav');
@@ -221,7 +221,7 @@ async function route() {
   const m = $('main');
   m.replaceChildren(h('p', { class: 'muted' }, 'Φόρτωση…'));
   try {
-    const f = { customers, customer, accounts, account, move, entry, rules, products, fx, atms, day, users }[page] || customers;
+    const f = { customers, customer, accounts, account, move, entry, loans, loan, rules, products, fx, atms, day, users }[page] || customers;
     const el = await f(id, extra);
     m.replaceChildren(el);
   } catch (e) {
@@ -360,8 +360,9 @@ async function account(id, tab) {
   const a = await api('accounts/' + id);
   const box = h('div');
   const actions = h('div', { class: 'actions' },
-    a.status !== 'C' ? h('a', { href: '#/move/' + id }, h('button', { class: 'primary' }, 'Νέα κίνηση')) : null);
-  if (can('MANAGER') && a.status !== 'C') {
+    a.kind === 'LN' ? h('a', { href: '#/loan/' + id }, h('button', { class: 'primary' }, 'Το δάνειο και το πρόγραμμά του')) : null,
+    a.status !== 'C' && a.kind !== 'LN' ? h('a', { href: '#/move/' + id }, h('button', { class: 'primary' }, 'Νέα κίνηση')) : null);
+  if (can('MANAGER') && a.status !== 'C' && a.kind !== 'LN') {           // (a loan: from its own page)
     actions.append(
       h('button', { onclick: () => act('status', { status: a.status === 'O' ? 'B' : 'O' }) }, a.status === 'O' ? 'Δέσμευση' : 'Αποδέσμευση'),
       h('button', { onclick: () => {
@@ -782,6 +783,98 @@ async function products() {
     }
     box.append(card);
   }
+  return box;
+}
+
+// ---- the loans
+const LN_STATUS = { D: 'Θα έρθει', O: 'Οφείλεται', L: 'Σε καθυστέρηση', P: 'Πληρώθηκε' };
+
+async function loans() {
+  const [prods] = await Promise.all([api('products')]);
+  const box = h('div');
+  const q = h('input', { placeholder: 'IBAN ή όνομα δικαιούχου', type: 'search' });
+  const st = h('select', null, h('option', { value: 'A' }, 'Ενεργά'), h('option', { value: 'C' }, 'Εξοφλημένα'),
+    h('option', { value: '' }, 'Όλα'));
+  const list = h('div');
+  async function load() {
+    const rows = await api('loans?status=' + st.value + '&q=' + encodeURIComponent(q.value.trim()));
+    list.replaceChildren(table(['Λογαριασμός δανείου', 'Προϊόν', 'Δικαιούχος', '#Κεφάλαιο', '#Μήνες', '#Επιτόκιο %', '#Οφειλή',
+      'Επόμενη δόση', 'Καθυστέρηση'],
+    rows.map((l) => h('tr', { class: 'click', onclick: () => { location.hash = '#/loan/' + l.id; } },
+      td(iban(l.iban), 'mono'), td(l.product), td(l.holder), tdn(amt(l.principal, l.currency)), tdn(l.months),
+      tdn(num(l.rate, 4)), tdn(amt(l.owed, l.currency)), td(date(l.next_due)),
+      td(l.late ? h('span', { class: 'badge no' }, l.late + ' δόσεις') : (l.status === 'C' ? 'Εξοφλήθηκε' : ''))))));
+  }
+  let timer;
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); });
+  st.addEventListener('change', load);
+  box.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', null, 'Δάνεια'), q, st), list));
+  // a new one: its installment first
+  const lprods = prods.filter((p) => p.kind === 'LN' && p.active === 'Y');
+  const quote = h('p', { class: 'muted' });
+  const f = form([
+    field('Λογαριασμός του πελάτη (IBAN ή αριθμός): εκεί πάνε τα χρήματα, από εκεί πληρώνονται οι δόσεις',
+      h('input', { name: 'pay_account', class: 'mono', required: true })),
+    field('Προϊόν', sel('product', Object.fromEntries(lprods.map((p) => [p.code, p.name + ' (' + p.code + ')'])))),
+    field('Ποσό', h('input', { name: 'amount', 'data-num': 1, inputmode: 'decimal', required: true })),
+    field('Μήνες', h('input', { name: 'months', 'data-num': 1, inputmode: 'numeric', required: true })),
+    field('Ημέρα δόσης (1 - 28· κενό: σήμερα)', h('input', { name: 'pay_day', 'data-num': 1, inputmode: 'numeric' }))],
+  async (x) => {
+    if (!confirm('Νέο δάνειο; Τα χρήματα πάνε αμέσως στον λογαριασμό του πελάτη.')) return;
+    const l = await api('loans', values(x));
+    toast('Νέο δάνειο ' + iban(l.iban));
+    location.hash = '#/loan/' + l.id;
+  }, 'Νέο δάνειο');
+  async function showQuote() {
+    const v = values(f);
+    if (!v.amount || !v.months) { quote.textContent = ''; return; }
+    try {
+      const r = await api('loans/quote?product=' + v.product + '&amount=' + v.amount + '&months=' + v.months);
+      quote.replaceChildren('Δόση ', h('b', null, amt(r.payment)), ' × ' + v.months + ' μήνες · επιτόκιο τώρα ' + num(r.rate, 4) + ' %');
+    } catch (e) { quote.textContent = e.message; }
+  }
+  for (const n of ['product', 'amount', 'months']) f.querySelector('[name=' + n + ']').addEventListener('change', showQuote);
+  if (can('MANAGER')) box.append(h('div', { class: 'card' }, h('h2', null, 'Νέο δάνειο'), f, quote));
+  await load();
+  return box;
+}
+
+async function loan(id) {
+  const l = await api('loans/' + id);
+  const box = h('div');
+  const cur = l.currency;
+  box.append(h('div', { class: 'card' },
+    h('h2', null, iban(l.iban), ' ', h('span', { class: 'badge ' + (l.status === 'A' ? 'O' : 'C') }, l.status === 'A' ? 'Ενεργό' : 'Εξοφλήθηκε')),
+    h('p', { class: 'muted' }, l.product_name + ' (' + l.product + ') · ' + l.holder + ' · από ' + date(l.start_date)
+      + ' · πληρώνεται από ', h('a', { href: '#/account/' + l.pay_account_id, class: 'mono' }, iban(l.pay_iban))),
+    h('div', { class: 'kv' }, kv('Κεφάλαιο', amt(l.principal, cur)), kv('Μήνες', l.months),
+      kv('Επιτόκιο τώρα', num(l.rate, 4) + ' % (' + (l.rate_type === 'V' ? 'κυμαινόμενο' : 'σταθερό') + ')'),
+      kv('Δόση στις', l.pay_day + ' του μήνα'), kv('Οφειλή', amt(l.owed, cur)), kv('Κεφάλαιο που μένει', amt(l.principal_after, cur)),
+      kv('Επόμενη δόση', date(l.next_due)), kv('Σε καθυστέρηση', l.late ? l.late + ' δόσεις' : '—'),
+      kv('Εξόφληση σήμερα', l.status === 'A' ? amt(l.payoff, cur) : '—')),
+    h('div', { class: 'actions' }, h('a', { href: '#/account/' + id }, h('button', null, 'Η καρτέλα του λογαριασμού')))));
+  if (can('MANAGER') && l.status === 'A') {
+    box.append(h('div', { class: 'card' }, h('h2', null, 'Πρόωρη εξόφληση'),
+      h('p', { class: 'muted' }, 'Μαζί πληρώνονται οι τόκοι των ημερών από την τελευταία δόση και η προμήθεια του προϊόντος, από τον λογαριασμό της δόσης. '
+        + 'Όχι όσο υπάρχουν δόσεις που οφείλονται.'),
+      form([field('Ποσό του κεφαλαίου', h('input', { name: 'amount', 'data-num': 1, inputmode: 'decimal', required: true })),
+        field('Μετά', sel('mode', { T: 'Ίδια δόση, λιγότερες δόσεις', P: 'Ίδιοι μήνες, μικρότερη δόση' }))], async (f) => {
+        await api('loans/' + id + '/prepay', values(f));
+        toast('Η πρόωρη εξόφληση έγινε');
+        route();
+      }, 'Πρόωρη εξόφληση'),
+      h('button', { class: 'danger', onclick: async () => {
+        if (!confirm('Ολική εξόφληση: ' + amt(l.payoff, cur) + ' από τον ' + iban(l.pay_iban) + ';')) return;
+        try { await api('loans/' + id + '/payoff', {}); toast('Το δάνειο εξοφλήθηκε'); route(); } catch (e) { toast(e.message, true); }
+      } }, 'Ολική εξόφληση (' + amt(l.payoff, cur) + ')')));
+  }
+  box.append(h('div', { class: 'card' }, h('h2', null, 'Πρόγραμμα αποπληρωμής'),
+    table(['#Δόση', 'Λήξη', '#Επιτόκιο %', '#Κεφάλαιο', '#Τόκος', '#Δόση', '#Υπόλοιπο', 'Κατάσταση', '#Πληρώθηκαν', '#Τέλος', '#Τόκοι υπερ.'],
+      l.schedule.map((s) => h('tr', { class: s.status === 'L' ? 'rev' : null },
+        tdn(s.n), td(date(s.due_date)), tdn(num(s.rate, 4)), tdn(money(s.principal)), tdn(money(s.interest)), tdn(money(s.payment)),
+        tdn(money(s.balance)),
+        td(s.status === 'L' ? h('span', { class: 'badge no' }, LN_STATUS.L) : LN_STATUS[s.status] + (s.paid_on ? ' ' + date(s.paid_on) : '')),
+        tdn(s.paid ? money(s.paid) : ''), tdn(s.late_fee ? money(s.late_fee) : ''), tdn(s.late_booked ? money(s.late_booked) : ''))))));
   return box;
 }
 
