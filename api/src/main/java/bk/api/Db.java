@@ -47,6 +47,12 @@ final class Db implements AutoCloseable {
         p.setInitialPoolSize(1);
         p.setMinPoolSize(1);
         p.setMaxPoolSize(8);
+        // a session that used a model of AI (VECTOR_EMBEDDING: the search, the assistant) keeps it in its PGA (~280
+        // MB); idle ones closed after 2 minutes, each one after 10 at most, so the database gets it back (Free: 2
+        // GB of PGA for everything, ORA-04036)
+        p.setInactiveConnectionTimeout(120);
+        p.setMaxConnectionReuseTime(600);
+        p.setTimeoutCheckInterval(30);
         p.setValidateConnectionOnBorrow(true);
         return new Db(p);
     }

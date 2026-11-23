@@ -6,6 +6,11 @@ languages), with its tokenizer in it, so the database gets a text and gives a ve
     input "input" (one text) -> SentencepieceTokenizer (onnxruntime-extensions: the op Oracle runs) -> <s> the
     tokens (at most 127) </s> -> the model -> the mean of its tokens -> L2 -> output "embedding" (384 floats)
 
+Its table of words (250.002 x 384, four fifths of the model) in int8 (onnxruntime.quantization, the op Gather only):
+178 MB in place of 453, the same vectors (cosine >= 0.9999). Each session of the database that embeds keeps the
+model in its PGA: ~280 MB in place of ~555 (Oracle Free: 2 GB of PGA for all its sessions, ORA-04036). The whole
+model in int8 (its MatMul too) was 112 MB, but its categories went wrong (a pizzeria among the bills).
+
 The e5 model wants "query: " before a question, "passage: " before a text searched: bk_vec puts them.
 
     python3 build_embed.py OUT_DIR       (writes OUT_DIR/bk_embed.onnx; checks it against the model as it is)
@@ -37,6 +42,12 @@ def download(dst):
             print('== download', path, flush=True)
             urllib.request.urlretrieve(REPO + path, f + '.part')
             os.replace(f + '.part', f)
+
+
+def quantize(src, out):
+    """the table of words in int8: the op Gather only (the layers of the model as they are)"""
+    from onnxruntime.quantization import QuantType, quantize_dynamic
+    quantize_dynamic(src, out, weight_type=QuantType.QInt8, op_types_to_quantize=['Gather'])
 
 
 def build(src, spm, out):
@@ -96,8 +107,8 @@ def check(dl, out):
         h = ref.run(None, f)[0][0].mean(0)
         h = h / np.linalg.norm(h)
         e = mine.run(None, {'input': np.array([s])})[0]
-        assert e.shape == (DIMS,) and float(h @ e) > 0.9999, (s, float(h @ e))
-    print('== checked: the same vectors as the model itself')
+        assert e.shape == (DIMS,) and float(h @ e) > 0.999, (s, float(h @ e))
+    print('== checked: the same vectors as the model itself (the table of words in int8)')
 
 
 def main():
@@ -105,7 +116,9 @@ def main():
     dl = os.path.join(out_dir, 'download')
     download(dl)
     out = os.path.join(out_dir, 'bk_embed.onnx')
-    build(os.path.join(dl, 'model.onnx'), os.path.join(dl, 'sentencepiece.bpe.model'), out + '.part')
+    q8 = os.path.join(dl, 'model_words_int8.onnx')
+    quantize(os.path.join(dl, 'model.onnx'), q8)
+    build(q8, os.path.join(dl, 'sentencepiece.bpe.model'), out + '.part')
     check(dl, out + '.part')
     os.replace(out + '.part', out)
     print('== %s (%d MB)' % (out, os.path.getsize(out) // 2 ** 20))
