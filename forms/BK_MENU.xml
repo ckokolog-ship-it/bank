@@ -28,6 +28,7 @@
       <MenuItem Name="DAY" Label="Imera kai kleisimo" CommandType="PL/SQL" MenuItemCode="new_form('BK_DAY');"/>
       <MenuItem Name="AI" Label="Ypoptes kiniseis" CommandType="PL/SQL" MenuItemCode="new_form('BK_AI');"/>
       <MenuItem Name="SEARCH" Label="Anazitisi me to noima" CommandType="PL/SQL" MenuItemCode="new_form('BK_SEARCH');"/>
+      <MenuItem Name="ASSIST" Label="Voithos tamia" CommandType="PL/SQL" MenuItemCode="new_form('BK_ASSIST');"/>
     </Menu>
     <Menu Name="SETUP_MENU">
       <MenuItem Name="RULES" Label="Kanones kiniseon" CommandType="PL/SQL" MenuItemCode="new_form('BK_RULES');"/>

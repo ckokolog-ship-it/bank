@@ -169,7 +169,8 @@ $('logout').addEventListener('click', () => logout(false));
 // the menu: an accordion of groups, one open at a time (the group of the page open by itself)
 const MENU = [
   { key: 'customers', title: '👥 Πελάτες', items: [['customers', 'Αναζήτηση'], ['customers/new', 'Νέος πελάτης']] },
-  { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['search', 'Αναζήτηση με το νόημα'], ['move', 'Νέα κίνηση'], ['loans', 'Δάνεια']] },
+  { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['search', 'Αναζήτηση με το νόημα'], ['assist', 'Βοηθός ταμία'], ['move', 'Νέα κίνηση'],
+    ['loans', 'Δάνεια']] },
   { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'],
     ['fx', 'Νομίσματα και ισοτιμίες'], ['branches', 'Υποκαταστήματα'], ['atms', 'ATM'], ['day', 'Ημέρα και κλείσιμο']] },
   { key: 'ai', title: '🤖 Ύποπτες κινήσεις', role: 'MANAGER', items: [['ai', 'Ειδοποιήσεις και μοντέλο']] },
@@ -233,7 +234,7 @@ async function route() {
   const m = $('main');
   m.replaceChildren(h('p', { class: 'muted' }, 'Φόρτωση…'));
   try {
-    const f = { customers, customer, accounts, account, move, entry, loans, loan, rules, products, fx, branches, atms, day, ai, search, users }[page] || customers;
+    const f = { customers, customer, accounts, account, move, entry, loans, loan, rules, products, fx, branches, atms, day, ai, search, assist, users }[page] || customers;
     const el = await f(id, extra);
     m.replaceChildren(el);
   } catch (e) {
@@ -474,6 +475,50 @@ async function search() {
     h('p', { class: 'muted' }, 'Γράψε τι ψάχνεις με δικά σου λόγια. Ένα μοντέλο embeddings μέσα στη βάση (multilingual-e5-small, ONNX) κάνει την ερώτηση και κάθε περιγραφή κίνησης ένα διάνυσμα 384 αριθμών· η βάση βρίσκει τα πιο κοντινά (VECTOR_DISTANCE). Έτσι το «φαγητό έξω» βρίσκει «Ταβέρνα Ο Μπάμπης» και «Pizza Fan πιτσαρία», χωρίς κοινή λέξη, και το «fuel» το «SHELL πρατήριο Ρίου».'),
     m && m.vec_info ? h('p', { class: 'muted' }, m.vec_info) : null,
     searchBox(null, true));
+}
+
+// ---- the assistant of the teller (db/BK_RAG.sql: RAG in the database, a local LLM)
+async function assist() {
+  const m = await api('ai/model').catch(() => null);
+  const q = h('input', { type: 'search', class: 'wide', placeholder: 'π.χ. Πόσα μπορεί να σηκώσει ένας πελάτης από ATM την ημέρα;' });
+  const out = h('div');
+  const hist = h('div');
+  async function ask() {
+    const v = q.value.trim();
+    if (!v) return;
+    out.replaceChildren(h('p', { class: 'muted' }, 'Ο βοηθός ψάχνει και γράφει την απάντηση (λίγα δευτερόλεπτα)…'));
+    try {
+      const r = await api('ai/ask', { question: v });
+      out.replaceChildren(
+        h('div', { class: 'answer' }, r.answer || ('Το γλωσσικό μοντέλο δεν απάντησε: ' + (r.error || '') + '. Τα αποσπάσματα που βρέθηκαν είναι από κάτω.')),
+        h('p', { class: 'muted' }, (r.model || '') + ' · ' + num((r.ms || 0) / 1000, 1) + ' δευτερόλεπτα'),
+        h('h3', null, 'Οι πηγές'),
+        ...r.sources.map((s) => h('details', { class: 'src' },
+          h('summary', null, '[' + s.n + '] ', h('b', null, s.title || ''), ' · ', h('span', { class: 'muted' }, s.source + ' · ' + num(s.similarity, 3))),
+          h('div', { class: 'src-text' }, s.text))));
+    } catch (e) { out.replaceChildren(h('p', { class: 'bad' }, e.message)); }
+  }
+  q.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') ask(); });
+  const chips = h('div', { class: 'row' }, ['Πόσα μπορεί να σηκώσει ένας πελάτης από ATM την ημέρα;', 'Πόσο κοστίζει μια ανάληψη στο γκισέ;',
+    'Τι επιτόκιο έχει το ταμιευτήριο για 12.000 ευρώ;', 'Τι γίνεται αν ο πελάτης βάλει λάθος PIN τρεις φορές;', 'Ποιο είναι το επιτόκιο του στεγαστικού;']
+    .map((w) => h('button', { onclick: () => { q.value = w; ask(); } }, w)));
+  const box = h('div', null, h('div', { class: 'card' }, h('h2', null, 'Βοηθός ταμία'),
+    h('p', { class: 'muted' }, 'Ρώτα στα ελληνικά για τα προϊόντα, τα επιτόκια, τους κανόνες και τη λειτουργία της τράπεζας. Η βάση βρίσκει τα πιο σχετικά κομμάτια γνώσης (AI Vector Search: τα προϊόντα και οι κανόνες όπως είναι τώρα, και οι οδηγίες), και ένα γλωσσικό μοντέλο στον ίδιο server (Ollama) γράφει την απάντηση μόνο από αυτά, με τον αριθμό κάθε πηγής. Τα δεδομένα δεν φεύγουν από τον server.'),
+    m && m.rag_info ? h('p', { class: 'muted' }, m.rag_info) : null,
+    h('div', { class: 'row' }, q, h('button', { class: 'primary', onclick: ask }, 'Ρώτα')), chips, out));
+  if (can('MANAGER')) {
+    box.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', null, 'Οι τελευταίες ερωτήσεις'),
+      h('button', { onclick: async (ev) => {
+        ev.target.disabled = true;
+        try { const r = await api('ai/knowledge', {}); toast('Η γνώση του βοηθού: ' + r.pieces + ' κομμάτια'); } catch (e) { toast(e.message, true); }
+        ev.target.disabled = false;
+      } }, 'Ανανέωση γνώσης')), hist));
+    const rows = await api('ai/questions?limit=20');
+    hist.replaceChildren(rows.length ? table(['Πότε', 'Ποιος', 'Ερώτηση', 'Απάντηση', '#Δευτ.'], rows.map((x) => h('tr', null,
+      td(date(x.asked_at)), td(x.asked_by), td(x.question), td(x.answer || h('span', { class: 'bad' }, x.error || '')),
+      tdn(num((x.ms || 0) / 1000, 1))))) : h('p', { class: 'muted' }, 'Καμία ακόμα.'));
+  }
+  return box;
 }
 
 // the tab of an account: what it spent in 12 months by category (the categories: the nearest in meaning to each text)

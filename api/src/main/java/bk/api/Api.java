@@ -28,6 +28,9 @@ import java.util.Map;
  *   GET  /api/check                              the rows of BK_CHECK (none: all is right)
  *   GET  /api/ai/search?q=&account=&category=&limit=   the movements nearest in meaning (db/BK_VECTOR.sql): {category, rows}
  *   GET  /api/ai/spending?account=               what an account spent in 12 months by category
+ *   POST /api/ai/ask {question}                  the assistant (db/BK_RAG.sql, a local LLM): its answer, its sources
+ *   GET  /api/ai/questions?limit=                the last questions to the assistant (M)
+ *   POST /api/ai/knowledge                       its knowledge again: the facts of the bank, the guides (M)
  *   GET  /api/ai/alerts?status=&limit=            the suspicious movements (db/BK_AI.sql: N new, C not a fraud, F a fraud)
  *   GET  /api/ai/model                           the models: ready (Y/N), in a line, the threshold; the embeddings
  *   POST /api/ai/scan {day}                      the movements of a day (none: the business day) scored: the new alerts (M)
@@ -226,7 +229,7 @@ final class Api {
                 return loans(c, u, get, p, q, in);
             }
             case "ai" -> {
-                if (!(get && (is(p, "ai", "search") || is(p, "ai", "spending")))) {
+                if (!(get && (is(p, "ai", "search") || is(p, "ai", "spending"))) && !(!get && is(p, "ai", "ask"))) {
                     need(u, "MANAGER");
                 }
                 return ai(c, u, get, p, q, in);
@@ -323,7 +326,7 @@ final class Api {
     private static Map<String, Object> aiModel(Connection c) throws SQLException {
         return Db.row(c, "select bk_ai.ready ready, bk_ai.model_info info, bk_ai.threshold threshold, "
                 + "(select count(*) from bk_ai_alert where status = 'N') open, bk_vec.ready vec_ready, "
-                + "bk_vec.model_info vec_info from dual");
+                + "bk_vec.model_info vec_info, bk_rag.info rag_info from dual");
     }
 
     private Object ai(Connection c, Auth.User u, boolean get, String[] p, Map<String, String> q, Map<String, Object> in)
@@ -365,6 +368,20 @@ final class Api {
                     cat.isEmpty() ? s : null, va, limit(q), cat.isEmpty() ? null : cat));
             return r;
         }
+        if (!get && is(p, "ai", "ask")) {
+            long id = Db.fn(c, "bk_rag.ask(?)", Http.text(in, "question", true));
+            return question(c, id);
+        }
+        if (get && is(p, "ai", "questions")) {
+            return Db.rows(c, "select id, asked_by, asked_at, question, dbms_lob.substr(answer, 1000, 1) answer, model, ms, error "
+                    + "from bk_ai_question order by id desc fetch first ? rows only", limit(q));
+        }
+        if (!get && is(p, "ai", "knowledge")) {
+            long n = Db.fn(c, "bk_rag.refresh");
+            Map<String, Object> r = new LinkedHashMap<>(aiModel(c));
+            r.put("pieces", n);
+            return r;
+        }
         if (get && is(p, "ai", "spending")) {
             long acc = toAccount(c, q.getOrDefault("account", ""));
             return Db.rows(c, "select category, name, amount, movements from bk_ai_spend12_v where account_id = ? "
@@ -392,6 +409,14 @@ final class Api {
             return Db.row(c, ALERT_COLS + " where id = ?", id);
         }
         throw new Http.Fail(404, "not_found", "Δεν υπάρχει αυτή η κλήση");
+    }
+
+    private static Map<String, Object> question(Connection c, long id) throws SQLException {
+        Map<String, Object> r = new LinkedHashMap<>(Db.row(c, "select id, asked_by, asked_at, question, "
+                + "dbms_lob.substr(answer, 4000, 1) answer, model, ms, error from bk_ai_question where id = ?", id));
+        r.put("sources", Db.rows(c, "select n, source, title, text, similarity from bk_ai_question_src "
+                + "where question_id = ? order by n", id));
+        return r;
     }
 
     private static List<Map<String, Object>> branches(Connection c) throws SQLException {
