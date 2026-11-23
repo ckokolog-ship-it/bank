@@ -691,7 +691,7 @@ def test_the_currencies_in_the_forms(cur):
     cur.connection.commit()
     run(cur, "ui.press('CTL.NEWACC');", CUST__ID=str(c), CTL__A_PRODUCT='CUR', CTL__A_OD='0', CTL__A_CURRENCY='USD')
     u = cur.execute("select account_id from bk_customer_account_v where customer_id = :c and currency = 'USD'", c=c).fetchone()[0]
-    assert '(USD)' in msgs(cur)
+    assert '(USD, ' in msgs(cur)
     assert 'BK-153' in fails(cur, "ui.press('CTL.NEWACC');", CUST__ID=str(c), CTL__A_PRODUCT='SAVP', CTL__A_OD='0',
                              CTL__A_CURRENCY='USD')
     compile_ui(cur, 'BK_MOVE')
@@ -760,3 +760,59 @@ def test_the_loans(cur):
     assert 'εξοφλήθηκε' in msgs(cur)
     assert cur.execute('select status from bk_loan where account_id = :a', a=a).fetchone()[0] == 'C'
     assert 'Πρώτα ένα δάνειο' in fails(cur, "ui.press('CTL.PAYOFF');")
+
+
+@needs_db
+def test_the_branches_in_the_forms(cur):
+    """BK_BRANCHES: a branch new, changed, inactive and again active; an account opened in a branch and moved to
+    another (its IBAN as it was); an ATM and a user in a branch"""
+    compile_ui(cur, 'BK_BRANCHES')
+    run(cur, "ui.press('CTL.SAVEBR');", CTL__S_CODE='9101', CTL__S_NAME='Test Φόρμες', CTL__S_CITY='Βόλος', CTL__S_ADDRESS='Test 1')
+    assert cur.execute("select name, city, active from bk_branch where code = '9101'").fetchone() == ('Test Φόρμες', 'Βόλος', 'Y')
+    assert 'BR:id = 9101;' in queries(cur)
+    run(cur, "ui.press('CTL.SAVEBR');", CTL__S_CODE='9101', CTL__S_NAME='Test Φόρμες 2', CTL__S_CITY='Βόλος')
+    assert cur.execute("select name from bk_branch where code = '9101'").fetchone()[0] == 'Test Φόρμες 2'
+    assert 'BK-' in fails(cur, "ui.press('CTL.SAVEBR');", CTL__S_CODE='12', CTL__S_NAME='Test')
+    run(cur, "ui.press('CTL.TOGGLEBR');", BR__ID='9101', BR__CODE='9101')
+    assert cur.execute("select active from bk_branch where code = '9101'").fetchone()[0] == 'N'
+    run(cur, "ui.press('CTL.TOGGLEBR');", BR__ID='9101', BR__CODE='9101')
+    assert cur.execute("select active from bk_branch where code = '9101'").fetchone()[0] == 'Y'
+    assert cur.execute("select code, accounts from bk_branch_v where code = '9101'").fetchone()[0] == '9101'
+
+    compile_ui(cur, 'BK_CUSTOMERS')
+    a = afm()
+    run(cur, "ui.press('CTL.NEWCUST');", CTL__C_NAME='Test Υποκ. Πελάτης', CTL__C_AFM=a)
+    cid = cur.execute('select id from bk_customer where afm = :a', a=a).fetchone()[0]
+    run(cur, "ui.press('CTL.NEWACC');", CUST__ID=str(cid), CTL__A_PRODUCT='CUR', CTL__A_BRANCH='9101')
+    acc, iban, br = cur.execute('select a.id, a.iban, a.branch_code from bk_account a, bk_holder h where h.account_id = a.id '
+                                'and h.customer_id = :c', c=cid).fetchone()
+    assert br == '9101' and iban[7:11] == '9101'
+
+    compile_ui(cur, 'BK_ACCOUNTS')
+    run(cur, "ui.press('CTL.MOVEBR');", ACC__ID=str(acc), CTL__B_BRANCH='0002')
+    assert cur.execute('select iban, branch_code from bk_account where id = :a', a=acc).fetchone() == (iban, '0002')
+    assert 'Πρώτα' in fails(cur, "ui.press('CTL.MOVEBR');", CTL__B_BRANCH='0002')
+
+    compile_ui(cur, 'BK_ATMS')
+    aid, old = cur.execute("select id, branch_code from bk_atm where code = 'ATM03'").fetchone()
+    run(cur, "ui.press('CTL.SETATMBR');", ATMS__ID=str(aid), ATMS__CODE='ATM03', CTL__M_BRANCH='9101')
+    assert cur.execute('select branch_code from bk_atm where id = :a', a=aid).fetchone()[0] == '9101'
+    run(cur, "ui.press('CTL.SETATMBR');", ATMS__ID=str(aid), ATMS__CODE='ATM03', CTL__M_BRANCH=old)
+
+    compile_ui(cur, 'BK_USERS')
+    admin = 'tst-fa-' + uuid.uuid4().hex[:6]
+    salt = os.urandom(16)
+    cur.execute("insert into bk_user (username, full_name, role, pw_hash, pw_salt, pw_iter) values (:u, 'Test', 'ADMIN', :h, :s, 1000)",
+                u=admin, h=hashlib.pbkdf2_hmac('sha256', PW.encode(), salt, 1000), s=salt)
+    cur.connection.commit()
+    t = token_of(cur, admin)
+    name = 'tst-fn-' + uuid.uuid4().hex[:6]
+    run(cur, "ui.press('CTL.NEWUSER');", GLOBAL__BK_TOKEN=t, CTL__U_NAME=name, CTL__U_FULL='Test Υποκ.', CTL__U_ROLE='TELLER',
+        CTL__U_PW=PW, CTL__U_PW2=PW, CTL__U_BRANCH='9101')
+    uid, br = cur.execute('select id, branch_code from bk_user where username = :u', u=name).fetchone()
+    assert br == '9101'
+    run(cur, "ui.press('CTL.SETUBR');", GLOBAL__BK_TOKEN=t, USR__ID=str(uid), USR__USERNAME=name, CTL__U_BRANCH='0003')
+    assert cur.execute('select branch_code from bk_user where id = :u', u=uid).fetchone()[0] == '0003'
+    cur.execute("delete from bk_user where username in (:a, :b)", a=admin, b=name)
+    cur.connection.commit()
+    assert cur.execute('select count(*) from bk_check').fetchone()[0] == 0

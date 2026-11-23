@@ -18,6 +18,7 @@ import shutil
 import socket
 import subprocess
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
 
@@ -374,3 +375,35 @@ def test_the_loans(base):
     done = ok(base, '/api/loans/%d/payoff' % loan['id'], {}, 'tst-manager')
     assert done['status'] == 'C' and done['payoff'] == 0 and done['owed'] == 0
     assert call(base, '/api/loans/%d' % p['id'], token=tok(base, 'tst-teller'))[0] == 404
+
+
+def test_the_branches(base):
+    """the branches (M to change them); an account opened in one, moved to another (its IBAN as it was), the list of
+    the accounts of a branch; an ATM and a user in a branch"""
+    s, r = call(base, '/api/branches', {'code': '9201', 'name': 'Test'}, tok(base, 'tst-teller'))
+    assert s == 403
+    rows = ok(base, '/api/branches', {'code': '9201', 'name': 'Test Ρεστ', 'city': 'Χανιά'}, 'tst-manager')
+    b = [x for x in rows if x['code'] == '9201'][0]
+    assert b['name'] == 'Test Ρεστ' and b['active'] == 'Y' and isinstance(b['by_channel'], list)
+    assert {'0001', '9201'} <= {x['code'] for x in ok(base, '/api/branches')}
+    c = ok(base, '/api/customers', {'name': 'Test Υποκ. %d' % random.randrange(10 ** 6), 'afm': afm()})
+    a = ok(base, '/api/accounts', {'product': 'TA1', 'customer_id': c['id'], 'branch': '9201'})
+    a = ok(base, '/api/accounts/%d' % a['id'])
+    assert a['branch_code'] == '9201' and a['branch_name'] == 'Test Ρεστ' and a['iban'][7:11] == '9201'
+    r = ok(base, '/api/accounts?branch=9201&q=' + urllib.parse.quote(a['iban']))
+    assert r['total'] == 1 and r['rows'][0]['branch_code'] == '9201'
+    assert call(base, '/api/accounts/%d/branch' % a['id'], {'branch': '0002'}, tok(base, 'tst-teller'))[0] == 403
+    m = ok(base, '/api/accounts/%d/branch' % a['id'], {'branch': '0002'}, 'tst-manager')
+    assert m['branch_code'] == '0002' and m['iban'] == a['iban']
+    assert ok(base, '/api/accounts?branch=9201&q=' + urllib.parse.quote(a['iban']))['total'] == 0
+    assert [x for x in ok(base, '/api/customers/%d' % c['id'])['accounts']][0]['branch_code'] == '0002'
+    old = [x for x in ok(base, '/api/atms', who='tst-manager')['atms'] if x['code'] == 'ATM03'][0]['branch_code']
+    r = ok(base, '/api/atms/ATM03/branch', {'branch': '9201'}, 'tst-manager')
+    assert [x for x in r['atms'] if x['code'] == 'ATM03'][0]['branch_code'] == '9201'
+    ok(base, '/api/atms/ATM03/branch', {'branch': old}, 'tst-manager')
+    name = 'tst-br%d' % random.randrange(10 ** 6)
+    u = ok(base, '/api/users', {'username': name, 'full_name': 'Test', 'role': 'TELLER', 'password': PW, 'branch': '9201'},
+           'tst-admin')
+    assert u['branch_code'] == '9201'
+    assert ok(base, '/api/users/%d' % u['id'], {'branch': '0003'}, 'tst-admin')['branch_code'] == '0003'
+    ok(base, '/api/users/%d' % u['id'], {'active': 'N'}, 'tst-admin')
