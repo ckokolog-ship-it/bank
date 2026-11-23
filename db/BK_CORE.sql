@@ -57,16 +57,29 @@ create or replace package bk_core as
   -- the currencies a product opens in ('EUR,USD': the first one by default)
   procedure set_currencies(p_product_code varchar2, p_currencies varchar2);
 
+  -- the branches: one new or changed (its code 4 digits; not active: no new account in it); an account moved to
+  -- another (its IBAN as it was: an IBAN never changes); the branch of a user (its counter), of an ATM. The branch
+  -- of what is done now: set_branch_context (a script; null: none), else that of the user of the session
+  -- (CLIENT_IDENTIFIER: the forms, the pages)
+  procedure set_branch(p_code varchar2, p_name varchar2, p_city varchar2 default null, p_address varchar2 default null,
+                       p_active varchar2 default 'Y');
+  procedure set_account_branch(p_account_id number, p_branch_code varchar2);
+  procedure set_user_branch(p_username varchar2, p_branch_code varchar2);
+  procedure set_atm_branch(p_atm_code varchar2, p_branch_code varchar2);
+  procedure set_branch_context(p_branch_code varchar2);
+  function session_branch return varchar2;
+
   -- the products and their rates (% a year, from a day on, by tier, in a currency)
   procedure set_rate(p_product_id number, p_valid_from date, p_min_balance number, p_rate number,
                      p_currency varchar2 default 'EUR');
   function rate_of(p_product_id number, p_day date, p_balance number, p_currency varchar2 default 'EUR') return number;
 
-  -- the accounts: opened on the business day for a customer (its primary holder), in a currency of its product
-  -- (null: the first of them), joint holders, closed (its balance 0: its interest capitalized first), blocked
+  -- the accounts: opened on the business day for a customer (its primary holder), in a branch (null: that of the
+  -- session, else the first one: its code in the IBAN), in a currency of its product (null: the first of them), joint holders, closed (its balance 0: its interest capitalized first), blocked
   -- (nothing out) or open again. Every amount of an account (its movements, its rules, its limits) in its currency
   function open_account(p_product_code varchar2, p_customer_id number, p_od_limit number default 0,
-                        p_name varchar2 default null, p_currency varchar2 default null) return number;
+                        p_name varchar2 default null, p_currency varchar2 default null,
+                        p_branch_code varchar2 default null) return number;
   procedure add_holder(p_account_id number, p_customer_id number);
   procedure remove_holder(p_account_id number, p_customer_id number);
   procedure set_status(p_account_id number, p_status varchar2);
@@ -211,6 +224,9 @@ end bk_core;
 
 create or replace package body bk_core as
 
+  g_branch varchar2(4);                -- set_branch_context: the branch of what is done now (a script)
+  g_atm_branch varchar2(4);            -- the branch of the ATM of the movement being done (the ATM functions)
+
   procedure fail(p_no pls_integer, p_text varchar2) is
   begin
     raise_application_error(-20100 - p_no, 'BK-' || to_char(100 + p_no) || ': ' || p_text);
@@ -245,11 +261,15 @@ create or replace package body bk_core as
     return case when mod(to_number(substr(p_iban, 5) || '1627' || substr(p_iban, 3, 2)), 97) = 1 then 'Y' else 'N' end;
   end;
 
+  -- (the branch: that of the account)
   function new_iban(p_account_id number) return varchar2 is
-    bban varchar2(23) := lpad(nvl(setting('BANK_CODE'), '999'), 3, '0') || lpad(nvl(setting('BRANCH_CODE'), '0001'), 4, '0')
-                         || lpad(p_account_id, 16, '0');
+    br varchar2(4);
+    bban varchar2(23);
     chk number;
   begin
+    select max(branch_code) into br from bk_account where id = p_account_id;
+    bban := lpad(nvl(setting('BANK_CODE'), '999'), 3, '0') || lpad(nvl(br, nvl(setting('BRANCH_CODE'), '0001')), 4, '0')
+            || lpad(p_account_id, 16, '0');
     chk := 98 - mod(to_number(bban || '162700'), 97);
     return 'GR' || lpad(chk, 2, '0') || bban;
   end;
@@ -453,6 +473,80 @@ create or replace package body bk_core as
   end;
 
   -- ---------------------------------------------------------------------------------------------
+  -- the branches
+  procedure branch_ok(p_code varchar2) is
+    n number;
+  begin
+    select count(*) into n from bk_branch where code = p_code and active = 'Y';
+    if n = 0 then
+      fail(60, 'Δεν υπάρχει ενεργό υποκατάστημα ' || p_code);
+    end if;
+  end;
+
+  procedure set_branch(p_code varchar2, p_name varchar2, p_city varchar2 default null, p_address varchar2 default null,
+                       p_active varchar2 default 'Y') is
+  begin
+    if p_code is null or not regexp_like(p_code, '^[0-9]{4}$') or p_name is null or nvl(p_active, '-') not in ('Y', 'N') then
+      fail(60, 'Υποκατάστημα: κωδικός 4 ψηφίων, όνομα, ενεργό Y ή N');
+    end if;
+    merge into bk_branch b
+    using (select p_code code from dual) v on (b.code = v.code)
+    when matched then update set name = p_name, city = p_city, address = p_address, active = p_active
+    when not matched then insert (code, name, city, address, active) values (p_code, p_name, p_city, p_address, p_active);
+  end;
+
+  procedure set_account_branch(p_account_id number, p_branch_code varchar2) is
+    a bk_account%rowtype;
+  begin
+    begin
+      select * into a from bk_account where id = p_account_id;
+    exception
+      when no_data_found then fail(8, 'Δεν υπάρχει λογαριασμός ' || p_account_id);
+    end;
+    branch_ok(p_branch_code);
+    if a.status = 'C' then
+      fail(12, 'Ο λογαριασμός ' || a.iban || ' είναι κλειστός');
+    end if;
+    update bk_account set branch_code = p_branch_code where id = p_account_id;
+  end;
+
+  procedure set_user_branch(p_username varchar2, p_branch_code varchar2) is
+  begin
+    branch_ok(p_branch_code);
+    update bk_user set branch_code = p_branch_code where username = lower(p_username);
+    if sql%rowcount = 0 then
+      fail(60, 'Δεν υπάρχει χρήστης ' || p_username);
+    end if;
+  end;
+
+  procedure set_atm_branch(p_atm_code varchar2, p_branch_code varchar2) is
+  begin
+    branch_ok(p_branch_code);
+    update bk_atm set branch_code = p_branch_code where code = upper(p_atm_code);
+    if sql%rowcount = 0 then
+      fail(60, 'Δεν υπάρχει ATM ' || p_atm_code);
+    end if;
+  end;
+
+  procedure set_branch_context(p_branch_code varchar2) is
+  begin
+    if p_branch_code is not null then
+      branch_ok(p_branch_code);
+    end if;
+    g_branch := p_branch_code;
+  end;
+
+  function session_branch return varchar2 is
+    v varchar2(4);
+  begin
+    if g_branch is not null then
+      return g_branch;
+    end if;
+    select max(branch_code) into v from bk_user where username = sys_context('userenv', 'client_identifier');
+    return v;
+  end;
+
+  -- ---------------------------------------------------------------------------------------------
   procedure set_rate(p_product_id number, p_valid_from date, p_min_balance number, p_rate number,
                      p_currency varchar2 default 'EUR') is
   begin
@@ -514,11 +608,14 @@ create or replace package body bk_core as
   end;
 
   function open_account(p_product_code varchar2, p_customer_id number, p_od_limit number default 0,
-                        p_name varchar2 default null, p_currency varchar2 default null) return number is
+                        p_name varchar2 default null, p_currency varchar2 default null,
+                        p_branch_code varchar2 default null) return number is
     p bk_product%rowtype;
     v number;
     cur varchar2(3);
+    br varchar2(4) := nvl(p_branch_code, nvl(session_branch, nvl(setting('BRANCH_CODE'), '0001')));
   begin
+    branch_ok(br);
     begin
       select * into p from bk_product where code = upper(p_product_code) and active = 'Y';
     exception
@@ -537,10 +634,15 @@ create or replace package body bk_core as
     end if;
     currency_ok(cur);
     v := fx_rate(cur);                            -- (a rate of it there: every line in the base currency too)
-    insert into bk_account (iban, product_id, name, opened_on, od_limit, currency)
-    values ('GR' || lpad('0', 25, '0'), p.id, p_name, open_day, nvl(p_od_limit, 0), cur)
+    insert into bk_account (iban, product_id, name, opened_on, od_limit, currency, branch_code)
+    values ('GR' || lpad('0', 25, '0'), p.id, p_name, open_day, nvl(p_od_limit, 0), cur, br)
     returning id into v;
-    update bk_account set iban = new_iban(v) where id = v;
+    -- (the IBAN first, then the row: new_iban reads the branch of the account)
+    declare
+      ib varchar2(27) := new_iban(v);
+    begin
+      update bk_account set iban = ib where id = v;
+    end;
     insert into bk_holder (account_id, customer_id, role) values (v, p_customer_id, 'P');
     return v;
   end;
@@ -604,8 +706,10 @@ create or replace package body bk_core as
       fail(16, 'Η ημερομηνία αξίας ' || to_char(vd, 'DD/MM/YYYY') || ' είναι πριν από την εργάσιμη ημέρα '
                || to_char(d, 'DD/MM/YYYY') || ' (οι τόκοι των κλεισμένων ημερών δεν ξαναμετριούνται)');
     end if;
-    insert into bk_entry (kind, book_date, value_date, descr, reversal_of, channel)
-    values (p_kind, d, vd, substr(p_descr, 1, 200), p_reversal_of, p_channel) returning id into v;
+    -- (where: at a counter the branch of the session, at an ATM its branch; e-banking and the bank: none)
+    insert into bk_entry (kind, book_date, value_date, descr, reversal_of, channel, branch_code)
+    values (p_kind, d, vd, substr(p_descr, 1, 200), p_reversal_of, p_channel,
+            case p_channel when 'ATM' then g_atm_branch when 'BR' then session_branch end) returning id into v;
     return v;
   end;
 
@@ -1691,7 +1795,15 @@ create or replace package body bk_core as
     if cnt > mx then
       fail(38, 'Ως ' || mx || ' χαρτονομίσματα σε μία ανάληψη');
     end if;
-    e := withdraw(a, p_amount, 'Ανάληψη ATM ' || m.code || ' ' || m.name, null, 'ATM');
+    g_atm_branch := m.branch_code;
+    begin
+      e := withdraw(a, p_amount, 'Ανάληψη ATM ' || m.code || ' ' || m.name, null, 'ATM');
+    exception
+      when others then
+        g_atm_branch := null;
+        raise;
+    end;
+    g_atm_branch := null;
     for i in 1 .. regexp_count(spec, ',') + 1 loop
       note_ := to_number(regexp_substr(regexp_substr(spec, '[^,]+', 1, i), '[0-9]+', 1, 1));
       pcs := to_number(regexp_substr(regexp_substr(spec, '[^,]+', 1, i), '[0-9]+', 1, 2));
@@ -1713,7 +1825,15 @@ create or replace package body bk_core as
     if mod(p_amount, 5) <> 0 then
       fail(38, 'Το ATM δέχεται χαρτονομίσματα: ένα ποσό σε πεντάδες');
     end if;
-    e := deposit(a, p_amount, 'Κατάθεση ATM ' || m.code || ' ' || m.name, null, 'ATM');
+    g_atm_branch := m.branch_code;
+    begin
+      e := deposit(a, p_amount, 'Κατάθεση ATM ' || m.code || ' ' || m.name, null, 'ATM');
+    exception
+      when others then
+        g_atm_branch := null;
+        raise;
+    end;
+    g_atm_branch := null;
     update bk_atm set deposits = deposits + p_amount where id = m.id;       -- (its bin: not given out again)
     return e;
   end;
@@ -1730,7 +1850,16 @@ create or replace package body bk_core as
       when no_data_found then
         fail(21, 'Δεν υπάρχει λογαριασμός ' || p_to_iban || ' στην τράπεζα');
     end;
-    return transfer(a, t, p_amount, 'Μεταφορά από ATM ' || m.code, null, 'ATM');
+    g_atm_branch := m.branch_code;
+    begin
+      t := transfer(a, t, p_amount, 'Μεταφορά από ATM ' || m.code, null, 'ATM');
+    exception
+      when others then
+        g_atm_branch := null;
+        raise;
+    end;
+    g_atm_branch := null;
+    return t;
   end;
 
   -- ---------------------------------------------------------------------------------------------

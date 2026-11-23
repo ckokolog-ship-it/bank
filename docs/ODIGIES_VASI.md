@@ -15,6 +15,7 @@
 
 | Πίνακας | Τι κρατά |
 |---|---|
+| `BK_BRANCH` | Τα υποκαταστήματα: κωδικός (στο IBAN), όνομα, πόλη, διεύθυνση ([ODIGIES_YPOKATASTIMATA.md](ODIGIES_YPOKATASTIMATA.md)) |
 | `BK_CURRENCY`, `BK_FX_RATE` | Τα νομίσματα (με το περιθώριο της τράπεζας) και οι ισοτιμίες τους ανά ημέρα ([ODIGIES_NOMISMATA.md](ODIGIES_NOMISMATA.md)) |
 | `BK_CUSTOMER` | Οι πελάτες: κωδικός (`C000001`), ονοματεπώνυμο, ΑΦΜ (με έλεγχο ψηφίου), ταυτότητα, τηλέφωνο, email, διεύθυνση |
 | `BK_PRODUCT` | Τα προϊόντα: είδος (`CUR` όψεως, `SAV` ταμιευτήριο, `TD` προθεσμιακή, `CC` πιστωτική κάρτα: χωρίς τόκους καταθέσεων), βάση ημερών, κεφαλαιοποίηση, φόρος τόκων, επιτόκιο υπερανάληψης |
@@ -238,6 +239,7 @@
 | `reverse` | Ο αντιλογισμός |
 | `close_day`, `accrue`, `capitalize`, `value_balance` | Το κλείσιμο ημέρας, οι τόκοι ενός λογαριασμού ως μια κλεισμένη μέρα, η κεφαλαιοποίηση, το υπόλοιπο ανά ημερομηνία αξίας |
 | `interest_by_day` | Ο τόκος μέρα προς μέρα, ο παλιός τρόπος: για εξήγηση ή έλεγχο |
+| `set_branch`, `set_account_branch`, `set_user_branch`, `set_atm_branch`, `set_branch_context`, `session_branch` | Τα υποκαταστήματα ([ODIGIES_YPOKATASTIMATA.md](ODIGIES_YPOKATASTIMATA.md)) |
 | `base_currency`, `set_currency`, `set_fx_rate`, `fx_rate`, `fx_convert`, `set_currencies` | Τα νομίσματα και οι ισοτιμίες ([ODIGIES_NOMISMATA.md](ODIGIES_NOMISMATA.md)) |
 | `set_ln_index`, `ln_index`, `set_ln_product`, `ln_open`, `ln_prepay`, `ln_payoff`, `ln_close_day` | Τα δάνεια ([ODIGIES_DANEIA.md](ODIGIES_DANEIA.md)) |
 | `set_cc_product`, `cc_open`, `cc_set_limit`, `cc_available`, `cc_authorize`, `cc_capture`, `cc_release`, `cc_purchase`, `cc_pay`, `cc_close_day` | Οι πιστωτικές κάρτες ([ODIGIES_KARTES.md](ODIGIES_KARTES.md)) |
@@ -274,6 +276,7 @@
 | BK-146 ως BK-151 | Πιστωτικές κάρτες: [ODIGIES_KARTES.md](ODIGIES_KARTES.md) §6 |
 | BK-152 ως BK-154 | Νομίσματα: [ODIGIES_NOMISMATA.md](ODIGIES_NOMISMATA.md) §5 |
 | BK-155 ως BK-159 | Δάνεια: [ODIGIES_DANEIA.md](ODIGIES_DANEIA.md) §6 |
+| BK-160 | Υποκαταστήματα: [ODIGIES_YPOKATASTIMATA.md](ODIGIES_YPOKATASTIMATA.md) §5 |
 
 ## 10. Ο έλεγχος (`BK_CHECK`)
 

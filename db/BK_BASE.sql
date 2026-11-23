@@ -78,6 +78,14 @@ select p.id, date '2020-01-01', v.min_balance, v.rate from (values
 join bk_product p on p.code = v.code
 where not exists (select 1 from bk_rate r where r.product_id = p.id);
 
+-- the branches (0001 in BK_TABLES); the ATMs in the branch of their city (below)
+insert into bk_branch (code, name, city, address)
+select v.code, v.name, v.city, v.address from (values
+  ('0002', 'Αθήνα Σύνταγμα', 'Αθήνα', 'Πανεπιστημίου 10, Αθήνα'),
+  ('0003', 'Θεσσαλονίκη κέντρο', 'Θεσσαλονίκη', 'Τσιμισκή 40, Θεσσαλονίκη')
+) v (code, name, city, address)
+where not exists (select 1 from bk_branch b where b.code = v.code);
+
 -- the ATMs, with their first cash
 insert into bk_atm (code, name, address, cash)
 select v.code, v.name, v.address, v.cash from (values
@@ -130,4 +138,9 @@ select p.id, v.cur, date '2020-01-01', v.min_balance, v.rate from (values
 ) v (code, cur, min_balance, rate)
 join bk_product p on p.code = v.code
 where not exists (select 1 from bk_rate r where r.product_id = p.id and r.currency = v.cur);
+commit;
+
+-- the ATMs of Athens and Thessaloniki in their branch (once: those of the first branch still)
+update bk_atm set branch_code = case code when 'ATM02' then '0002' when 'ATM03' then '0003' end
+where code in ('ATM02', 'ATM03') and branch_code = '0001';
 commit;
