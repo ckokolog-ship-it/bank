@@ -34,6 +34,10 @@ import java.util.Map;
  *                                                base currency, and by currency) and their history
  *   POST /api/products/{code}/rates {valid_from, min_balance, rate, currency}   a rate from a day on (M)
  *   POST /api/products/{code}/currencies {currencies: "EUR,USD"}   the currencies it opens in (M)
+ *   GET  /api/branches                           the branches: accounts, users, ATMs, cash (and by channel)
+ *   POST /api/branches {code, name, city, address, active}   a branch new or changed (M)
+ *   POST /api/accounts/{id}/branch {branch}      an account to another branch: its IBAN as it was (M)
+ *   POST /api/atms/{code}/branch {branch}        an ATM to a branch (M)
  *   GET  /api/loans?q=&status=                   the loans (A active, C paid off)
  *   GET  /api/loans/quote?product=&amount=&months=   the installment of a loan before it is opened, the rate now
  *   GET  /api/loans/{id}                         one: its schedule, what pays it off today
@@ -45,9 +49,10 @@ import java.util.Map;
  *   GET  /api/fx/{code}?days=                    its rates, the newest first
  *   POST /api/fx {code, name, decimals, spread_pct, active}   a currency new or changed (M)
  *   POST /api/fx/{code}/rates {day, mid}         its rate from a day on: 1 of the base currency = mid (M)
- *   GET  /api/accounts?q=&status=&limit=&offset= the accounts (IBAN, the name or AFM of a holder)
+ *   GET  /api/accounts?q=&status=&branch=&limit=&offset= the accounts (IBAN, the name or AFM of a holder; a branch)
  *   GET  /api/accounts/{id}                      one: its product, holders, balance, what is available
- *   POST /api/accounts {product, customer_id, od_limit, name, currency}   a new one (in a currency of its product)
+ *   POST /api/accounts {product, customer_id, od_limit, name, currency, branch}   a new one (in a currency of its
+ *                                                product; in a branch, else that of the user)
  *   POST /api/accounts/{id}/holders {customer_id}   POST /api/accounts/{id}/holders/{customer}/remove
  *   POST /api/accounts/{id}/status {status O|B}  (M)   .../od-limit {od_limit} (M)   .../close (M)
  *   GET  /api/accounts/{id}/statement?from=&to=  its moves, the balance before and after
@@ -213,6 +218,19 @@ final class Api {
             case "loans" -> {
                 return loans(c, u, get, p, q, in);
             }
+            case "branches" -> {
+                if (get && p.length == 1) {
+                    return branches(c);
+                }
+                if (!get && p.length == 1) {
+                    need(u, "MANAGER");
+                    String active = Http.text(in, "active", false);
+                    Db.exec(c, "begin bk_core.set_branch(?, ?, ?, ?, ?); end;", Http.text(in, "code", true),
+                            Http.text(in, "name", true), Http.text(in, "city", false), Http.text(in, "address", false),
+                            active == null ? "Y" : active.toUpperCase());
+                    return branches(c);
+                }
+            }
             case "accounts" -> {
                 return accounts(c, u, get, p, q, in);
             }
@@ -248,6 +266,11 @@ final class Api {
                             Http.decimal(in, "max_notes", null));
                     return atms(c);
                 }
+                if (!get && is(p, "atms", "*", "branch")) {
+                    need(u, "MANAGER");
+                    Db.exec(c, "begin bk_core.set_atm_branch(?, ?); end;", p[1], Http.text(in, "branch", true));
+                    return atms(c);
+                }
                 if (!get && is(p, "atms", "*", "fill")) {
                     need(u, "MANAGER");
                     Db.exec(c, "begin bk_core.atm_fill(?, ?, ?); end;", p[1], Http.decimal(in, "note", null),
@@ -270,13 +293,24 @@ final class Api {
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("notes", Atm.notes(c));
         r.put("max_notes", Atm.maxNotes(c));
-        List<Map<String, Object>> rows = Db.rows(c, "select id, code, name, address, cash, deposits, active from bk_atm order by code");
+        List<Map<String, Object>> rows = Db.rows(c, "select id, code, name, address, cash, deposits, active, branch_code "
+                + "from bk_atm order by code");
         for (Map<String, Object> m : rows) {
             m.put("cassettes", Db.rows(c, "select note, pieces, note * pieces amount from bk_atm_note where atm_id = ? "
                     + "order by note desc", m.remove("id")));
         }
         r.put("atms", rows);
         return r;
+    }
+
+    private static List<Map<String, Object>> branches(Connection c) throws SQLException {
+        List<Map<String, Object>> rows = Db.rows(c, "select code, name, city, address, active, accounts, users, atms, cash "
+                + "from bk_branch_v order by code");
+        for (Map<String, Object> b : rows) {
+            b.put("by_channel", Db.rows(c, "select channel, cash, cash_today, entries from bk_branch_cash "
+                    + "where branch_code = ? order by channel", b.get("code")));
+        }
+        return rows;
     }
 
     private static Map<String, Object> me(Auth.User u) {
@@ -368,7 +402,7 @@ final class Api {
             throw new Http.Fail(404, "not_found", "Δεν υπάρχει πελάτης " + id);
         }
         r.put("accounts", Db.rows(c, "select a.id, a.iban, p.code product, p.name product_name, a.name, a.status, "
-                + "a.currency, a.balance, a.od_limit, h.role from bk_holder h join bk_account a on a.id = h.account_id "
+                + "a.currency, a.branch_code, a.balance, a.od_limit, h.role from bk_holder h join bk_account a on a.id = h.account_id "
                 + "join bk_product p on p.id = a.product_id where h.customer_id = ? order by a.status desc, a.id", id));
         return r;
     }
@@ -571,29 +605,31 @@ final class Api {
         if (get && p.length == 1) {
             String s = q.getOrDefault("q", "").trim();
             String st = q.getOrDefault("status", "").trim().toUpperCase();
+            String br = q.getOrDefault("branch", "").trim();
             Object v = s.isEmpty() ? null : s;
             Object vs = st.isEmpty() ? null : st;
+            Object vb = br.isEmpty() ? null : br;
             String from = " from bk_account a join bk_product p on p.id = a.product_id "
                     + "join bk_holder h on h.account_id = a.id and h.role = 'P' join bk_customer c on c.id = h.customer_id "
                     + "where (? is null or a.iban like '%' || replace(upper(?), ' ') || '%' or " + ai("c.name")
                     + " like '%' || " + ai("?") + " || '%' or c.afm = ? or c.code = upper(?)"
                     + " or exists (select 1 from bk_holder j join bk_customer jc on jc.id = j.customer_id "
                     + "where j.account_id = a.id and j.role = 'J' and (" + ai("jc.name") + " like '%' || " + ai("?")
-                    + " || '%' or jc.afm = ?))) and (? is null or a.status = ?)";
+                    + " || '%' or jc.afm = ?))) and (? is null or a.status = ?) and (? is null or a.branch_code = ?)";
             Map<String, Object> r = new LinkedHashMap<>();
-            r.put("total", Db.row(c, "select count(*) n" + from, v, v, v, v, v, v, v, vs, vs).get("n"));
-            r.put("rows", Db.rows(c, "select a.id, a.iban, p.code product, a.name, a.status, a.currency, a.balance, "
+            r.put("total", Db.row(c, "select count(*) n" + from, v, v, v, v, v, v, v, vs, vs, vb, vb).get("n"));
+            r.put("rows", Db.rows(c, "select a.id, a.iban, p.code product, a.name, a.status, a.currency, a.branch_code, a.balance, "
                     + "a.od_limit, a.accrued, c.id customer_id, c.name holder, (select count(*) from bk_holder j where j.account_id = a.id) "
                     + "holders" + from + " order by a.id offset ? rows fetch next ? rows only",
-                    v, v, v, v, v, v, v, vs, vs, Http.number(q, "offset", 0, 0, Integer.MAX_VALUE), limit(q)));
+                    v, v, v, v, v, v, v, vs, vs, vb, vb, Http.number(q, "offset", 0, 0, Integer.MAX_VALUE), limit(q)));
             return r;
         }
         if (!get && p.length == 1) {
             Long cust = Http.longValue(in, "customer_id");
             String prod = Http.text(in, "product", true);
             long id = Db.fn(c, "bk_core.open_account(p_product_code => ?, p_customer_id => ?, p_od_limit => ?, p_name => ?, "
-                    + "p_currency => ?)", prod, cust, Http.decimal(in, "od_limit", BigDecimal.ZERO), Http.text(in, "name", false),
-                    Http.text(in, "currency", false));
+                    + "p_currency => ?, p_branch_code => ?)", prod, cust, Http.decimal(in, "od_limit", BigDecimal.ZERO),
+                    Http.text(in, "name", false), Http.text(in, "currency", false), Http.text(in, "branch", false));
             return account(c, id);
         }
         if (p.length < 2) {
@@ -644,6 +680,11 @@ final class Api {
             Db.exec(c, "begin bk_core.set_status(?, ?); end;", id, Http.text(in, "status", true));
             return account(c, id);
         }
+        if (!get && is(p, "accounts", "*", "branch")) {
+            need(u, "MANAGER");
+            Db.exec(c, "begin bk_core.set_account_branch(?, ?); end;", id, Http.text(in, "branch", true));
+            return account(c, id);
+        }
         if (!get && is(p, "accounts", "*", "od-limit")) {
             need(u, "MANAGER");
             Db.exec(c, "begin bk_core.set_od_limit(?, ?); end;", id, Http.decimal(in, "od_limit", BigDecimal.ZERO));
@@ -669,7 +710,8 @@ final class Api {
     private static Map<String, Object> account(Connection c, long id) throws SQLException {
         Map<String, Object> r = Db.row(c, "select a.id, a.iban, a.name, p.code product, p.name product_name, p.kind, "
                 + "p.day_basis, p.cap_every, p.tax_rate, p.od_rate, a.opened_on, a.closed_on, a.status, a.od_limit, "
-                + "a.balance, round(a.accrued, 2) accrued, a.accrued_to, a.currency, p.currencies, "
+                + "a.balance, round(a.accrued, 2) accrued, a.accrued_to, a.currency, p.currencies, a.branch_code, "
+                + "(select b.name from bk_branch b where b.code = a.branch_code) branch_name, "
                 + "case when a.status = 'O' then a.balance + a.od_limit else 0 end available, "
                 + "bk_core.rate_of(a.product_id, bk_core.open_day, a.balance, a.currency) rate_now "
                 + "from bk_account a join bk_product p on p.id = a.product_id where a.id = ?", id);
@@ -895,7 +937,7 @@ final class Api {
     }
 
     // ---------------------------------------------------------------------------------------------
-    private static final String USER_COLS = "select u.id, u.username, u.full_name, u.role, u.active, u.failed, "
+    private static final String USER_COLS = "select u.id, u.username, u.full_name, u.role, u.active, u.failed, u.branch_code, "
             + "case when u.failed >= " + Auth.MAX_FAILED + " then 'Y' else 'N' end locked, u.created_at, "
             + "(select to_char(max(s.created_at), 'YYYY-MM-DD HH24:MI') from bk_session s where s.user_id = u.id) last_login "
             + "from bk_user u";
@@ -908,6 +950,10 @@ final class Api {
         if (!get && p.length == 1) {
             long id = Auth.createUser(c, Http.text(in, "username", true), Http.text(in, "full_name", true),
                     Http.text(in, "role", true), Http.text(in, "password", true));
+            String br = Http.text(in, "branch", false);
+            if (br != null) {
+                Db.exec(c, "begin bk_core.set_user_branch(?, ?); end;", Http.text(in, "username", true), br);
+            }
             return Db.row(c, USER_COLS + " where u.id = ?", id);
         }
         if (!get && p.length == 2) {
@@ -934,6 +980,10 @@ final class Api {
                     name, role, active, id);
             if ("N".equals(active)) {
                 Db.exec(c, "update bk_session set revoked = 'Y' where user_id = ?", id);
+            }
+            String br = Http.text(in, "branch", false);
+            if (br != null) {
+                Db.exec(c, "begin bk_core.set_user_branch(?, ?); end;", old.get("username"), br);
             }
             String pw = Http.text(in, "password", false);
             if (pw != null) {

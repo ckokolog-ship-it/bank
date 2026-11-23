@@ -1,5 +1,5 @@
 -- BK_UI.pls -- the package UI of the forms of the bank (BK_LOGIN, BK_MAIN, BK_CUSTOMERS, BK_ACCOUNTS, BK_MOVE,
--- BK_DAY, BK_RULES, BK_PRODUCTS, BK_CARDS, BK_CCARDS, BK_LOANS, BK_FX, BK_ATMS, BK_USERS): mkforms.py puts it in each form. The triggers only call it:
+-- BK_DAY, BK_RULES, BK_PRODUCTS, BK_CARDS, BK_CCARDS, BK_LOANS, BK_FX, BK_BRANCHES, BK_ATMS, BK_USERS): mkforms.py puts it in each form. The triggers only call it:
 --   WHEN-NEW-FORM-INSTANCE   ui.init
 --   WHEN-NEW-RECORD-INSTANCE ui.master(:SYSTEM.TRIGGER_BLOCK)   (a master: its detail again)
 --   WHEN-BUTTON-PRESSED      ui.press(:SYSTEM.TRIGGER_ITEM)   (the toolbar: ui.tool)
@@ -287,11 +287,14 @@ PACKAGE BODY ui IS
     acc NUMBER;
     e NUMBER;
     amt NUMBER;
-    k VARCHAR2(3);
+    k VARCHAR2(4);                   -- (a currency; the code of a branch)
     st VARCHAR2(1);
     t VARCHAR2(200);
     tok VARCHAR2(100);
     r VARCHAR2(10);
+    w1 VARCHAR2(200);                -- (the words of a branch: name, city, address)
+    w2 VARCHAR2(200);
+    w3 VARCHAR2(400);
     d DATE;
   BEGIN
     IF p_item IN ('CTL.LOGIN', 'CTL.L_PW') THEN
@@ -341,9 +344,11 @@ PACKAGE BODY ui IS
         fail('Πρώτα ένας πελάτης στην οθόνη');
       END IF;
       acc := bk_core.open_account(p_product_code => name_in('CTL.A_PRODUCT'), p_customer_id => id_,
-                                  p_od_limit => nvl(num('CTL.A_OD'), 0), p_currency => name_in('CTL.A_CURRENCY'));
+                                  p_od_limit => nvl(num('CTL.A_OD'), 0), p_currency => name_in('CTL.A_CURRENCY'),
+                                  p_branch_code => name_in('CTL.A_BRANCH'));
       forms_ddl('COMMIT');
-      SELECT iban || ' (' || currency || ')' INTO t FROM bk_account WHERE id = acc;
+      SELECT iban || ' (' || currency || ', ' || branch_code INTO t FROM bk_account WHERE id = acc;
+      t := replace(t, ', ', ', υποκ. ') || ')';
       g_master := NULL;
       go_block('CA');
       execute_query;
@@ -722,6 +727,38 @@ PACKAGE BODY ui IS
            || '  ·  ο πελάτης παίρνει ' || money(bk_core.fx_convert(amt, name_in('CTL.X_FROM'), name_in('CTL.X_TO'), NULL, 'Y'), name_in('CTL.X_TO')),
            'CTL.X_RESULT');
 
+    -- BK_ACCOUNTS: the account on the screen to another branch (its IBAN as it was)
+    ELSIF p_item = 'CTL.MOVEBR' THEN
+      acc := num('ACC.ID');
+      IF acc IS NULL THEN
+        fail('Πρώτα ένας λογαριασμός στην οθόνη');
+      END IF;
+      bk_core.set_account_branch(acc, name_in('CTL.B_BRANCH'));
+      forms_ddl('COMMIT');
+      copy('', 'CTL.B_BRANCH');
+      show_only(acc);
+      message('Ο λογαριασμός μεταφέρθηκε: το IBAN μένει ίδιο');
+
+    -- BK_BRANCHES: a branch new or changed; the one on the screen active or not
+    ELSIF p_item = 'CTL.SAVEBR' THEN
+      k := name_in('CTL.S_CODE');
+      SELECT nvl(max(active), 'Y') INTO st FROM bk_branch WHERE code = k;
+      bk_core.set_branch(k, name_in('CTL.S_NAME'), name_in('CTL.S_CITY'), name_in('CTL.S_ADDRESS'), st);
+      forms_ddl('COMMIT');
+      show_only(to_number(k));
+      message('Το υποκατάστημα ' || k || ' αποθηκεύτηκε');
+    ELSIF p_item = 'CTL.TOGGLEBR' THEN
+      id_ := num('BR.ID');
+      IF id_ IS NULL THEN
+        fail('Πρώτα ένα υποκατάστημα στην οθόνη');
+      END IF;
+      k := name_in('BR.CODE');
+      SELECT CASE active WHEN 'Y' THEN 'N' ELSE 'Y' END, name, city, address INTO st, w1, w2, w3 FROM bk_branch WHERE code = k;
+      bk_core.set_branch(k, w1, w2, w3, st);
+      forms_ddl('COMMIT');
+      show_only(id_);
+      message('Το υποκατάστημα ' || k || ': ' || CASE st WHEN 'Y' THEN 'ενεργό' ELSE 'ανενεργό' END);
+
     -- BK_ATMS: a cassette of the ATM on the screen; the notes of all of them
     ELSIF p_item = 'CTL.FILL' THEN
       id_ := num('ATMS.ID');
@@ -733,6 +770,15 @@ PACKAGE BODY ui IS
       copy('', 'CTL.F_PIECES');
       show_only(id_);
       message('Η κασέτα των ' || name_in('CTL.F_NOTE') || ' € άλλαξε');
+    ELSIF p_item = 'CTL.SETATMBR' THEN
+      id_ := num('ATMS.ID');
+      IF id_ IS NULL THEN
+        fail('Πρώτα ένα ATM στην οθόνη');
+      END IF;
+      bk_core.set_atm_branch(name_in('ATMS.CODE'), name_in('CTL.M_BRANCH'));
+      forms_ddl('COMMIT');
+      show_only(id_);
+      message('Το ATM ' || name_in('ATMS.CODE') || ': υποκατάστημα ' || name_in('CTL.M_BRANCH'));
     ELSIF p_item = 'CTL.SETNOTES' THEN
       bk_core.set_atm_notes(name_in('CTL.S_NOTES'), num('CTL.S_MAX'));
       forms_ddl('COMMIT');
@@ -744,6 +790,9 @@ PACKAGE BODY ui IS
       fail('Οι δύο κωδικοί δεν είναι ίδιοι');
     ELSIF p_item = 'CTL.NEWUSER' THEN
       id_ := bk_auth.create_user(name_in('CTL.U_NAME'), name_in('CTL.U_FULL'), name_in('CTL.U_ROLE'), name_in('CTL.U_PW'));
+      IF name_in('CTL.U_BRANCH') IS NOT NULL THEN
+        bk_core.set_user_branch(name_in('CTL.U_NAME'), name_in('CTL.U_BRANCH'));
+      END IF;
       forms_ddl('COMMIT');
       copy('', 'CTL.U_PW');
       copy('', 'CTL.U_PW2');
@@ -751,7 +800,7 @@ PACKAGE BODY ui IS
       copy('', 'CTL.U_FULL');
       requery;
       message('Ο χρήστης καταχωρίστηκε');
-    ELSIF p_item IN ('CTL.SETPW', 'CTL.SETROLE', 'CTL.TOGGLEACT', 'CTL.UNLOCK') THEN
+    ELSIF p_item IN ('CTL.SETPW', 'CTL.SETROLE', 'CTL.TOGGLEACT', 'CTL.UNLOCK', 'CTL.SETUBR') THEN
       id_ := num('USR.ID');
       IF id_ IS NULL THEN
         fail('Πρώτα ένας χρήστης από τη λίστα');
@@ -773,6 +822,9 @@ PACKAGE BODY ui IS
           bk_auth.set_active(id_, 'Y');
           t := 'Ο χρήστης ενεργοποιήθηκε';
         END IF;
+      ELSIF p_item = 'CTL.SETUBR' THEN
+        bk_core.set_user_branch(name_in('USR.USERNAME'), name_in('CTL.U_BRANCH'));
+        t := 'Το υποκατάστημα του χρήστη: ' || name_in('CTL.U_BRANCH');
       ELSE
         bk_auth.unlock(id_);
         t := 'Ο χρήστης ξεκλειδώθηκε';
@@ -881,7 +933,7 @@ PACKAGE BODY ui IS
     en NUMBER;
     ln NUMBER;
     s NUMBER;
-    k VARCHAR2(3);
+    k VARCHAR2(4);                   -- (a currency; the code of a branch)
     t VARCHAR2(60);
   BEGIN
     IF p_block IN ('ST', 'LAST') THEN

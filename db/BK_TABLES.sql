@@ -738,10 +738,12 @@ where a.id = l.account_id and p.id = a.product_id and x.product_id = p.id and b.
 -- the branches: their accounts (open), users, ATMs; the cash of each (in the base currency: what came in at its
 -- counters and its ATMs less what went out, today and in all)
 create or replace view bk_branch_v as
-select b.code, b.name, b.city, b.address, b.active,
+select to_number(b.code) id, b.code, b.name, b.city, b.address, b.active,
        (select count(*) from bk_account a where a.branch_code = b.code and a.status <> 'C') accounts,
        (select count(*) from bk_user u where u.branch_code = b.code and u.active = 'Y') users,
-       (select count(*) from bk_atm m where m.branch_code = b.code) atms
+       (select count(*) from bk_atm m where m.branch_code = b.code) atms,
+       (select nvl(sum(l.base_debit - l.base_credit), 0) from bk_line l, bk_entry e
+        where e.id = l.entry_id and l.gl_code = 'CASH' and e.branch_code = b.code) cash
 from bk_branch b;
 
 create or replace view bk_branch_cash as

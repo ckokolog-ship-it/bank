@@ -171,7 +171,7 @@ const MENU = [
   { key: 'customers', title: '👥 Πελάτες', items: [['customers', 'Αναζήτηση'], ['customers/new', 'Νέος πελάτης']] },
   { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['move', 'Νέα κίνηση'], ['loans', 'Δάνεια']] },
   { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'],
-    ['fx', 'Νομίσματα και ισοτιμίες'], ['atms', 'ATM'], ['day', 'Ημέρα και κλείσιμο']] },
+    ['fx', 'Νομίσματα και ισοτιμίες'], ['branches', 'Υποκαταστήματα'], ['atms', 'ATM'], ['day', 'Ημέρα και κλείσιμο']] },
   { key: 'admin', title: '🔐 Διαχείριση', role: 'ADMIN', items: [['users', 'Χρήστες']] }];
 // the item of the menu of a page (a customer: of the customers, an account or an entry: of the accounts)
 const MENU_OF = { customer: 'customers', account: 'accounts', entry: 'accounts', loan: 'loans' };
@@ -215,6 +215,16 @@ document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') menu(fal
 
 window.addEventListener('hashchange', route);
 
+// the branches (a list, for the selects): once; the branch of the list of the accounts, from the page of the branches
+let BRANCHES = null;
+let ACC_BRANCH = null;
+async function branchList() {
+  if (!BRANCHES) BRANCHES = await api('branches');
+  return BRANCHES;
+}
+const branchOpts = (rows, blank) => Object.assign(blank ? { '': blank } : {},
+  Object.fromEntries(rows.filter((b) => b.active === 'Y').map((b) => [b.code, b.code + ' · ' + b.name])));
+
 async function route() {
   if (!S.me) return;
   const [page, id, extra] = (location.hash.replace(/^#\/?/, '') || 'customers').split('/');
@@ -222,7 +232,7 @@ async function route() {
   const m = $('main');
   m.replaceChildren(h('p', { class: 'muted' }, 'Φόρτωση…'));
   try {
-    const f = { customers, customer, accounts, account, move, entry, loans, loan, rules, products, fx, atms, day, users }[page] || customers;
+    const f = { customers, customer, accounts, account, move, entry, loans, loan, rules, products, fx, branches, atms, day, users }[page] || customers;
     const el = await f(id, extra);
     m.replaceChildren(el);
   } catch (e) {
@@ -283,7 +293,7 @@ function newCustomer(box) {
 }
 
 async function customer(id) {
-  const [c, prods] = await Promise.all([api('customers/' + id), api('products')]);
+  const [c, prods, brs] = await Promise.all([api('customers/' + id), api('products'), branchList()]);
   const box = h('div');
   // the currencies of the product chosen (the first: by default)
   const live = prods.filter((p) => p.active === 'Y');
@@ -309,13 +319,14 @@ async function customer(id) {
       kv('Κατάσταση', c.active === 'Y' ? 'Ενεργός' : 'Ανενεργός')),
     edit));
   box.append(h('div', { class: 'card' }, h('h2', null, 'Λογαριασμοί'),
-    table(['IBAN', 'Προϊόν', 'Όνομα', 'Δικαιούχος', 'Κατάσταση', '#Υπόλοιπο'],
+    table(['IBAN', 'Προϊόν', 'Όνομα', 'Δικαιούχος', 'Υποκ.', 'Κατάσταση', '#Υπόλοιπο'],
       c.accounts.map((a) => h('tr', { class: 'click', onclick: () => { location.hash = '#/account/' + a.id; } },
-        td(iban(a.iban), 'mono'), td(a.product_name), td(a.name), td(a.role === 'P' ? 'Κύριος' : 'Συνδικαιούχος'),
+        td(iban(a.iban), 'mono'), td(a.product_name), td(a.name), td(a.role === 'P' ? 'Κύριος' : 'Συνδικαιούχος'), td(a.branch_code),
         td(h('span', { class: 'badge ' + a.status }, STATUS[a.status])), tdn(amt(a.balance, a.currency))))),
     c.active === 'Y' ? h('div', null, h('h3', null, 'Νέος λογαριασμός'), form([
       field('Προϊόν', prodSel),
       field('Νόμισμα', curSel),
+      field('Υποκατάστημα', sel('branch', branchOpts(brs, 'Του χρήστη'))),
       field('Όνομα (προαιρετικά)', h('input', { name: 'name' })),
       field('Όριο υπερανάληψης', h('input', { name: 'od_limit', 'data-num': 1, inputmode: 'decimal', value: '0' }))],
     async (f) => {
@@ -335,13 +346,16 @@ async function accounts() {
   const box = h('div');
   const q = h('input', { placeholder: 'IBAN, όνομα ή ΑΦΜ δικαιούχου, κωδικός πελάτη', type: 'search' });
   const st = h('select', null, h('option', { value: '' }, 'Όλοι'), Object.entries(STATUS).map(([k, v]) => h('option', { value: k }, v)));
+  const bs = sel('branch', branchOpts(await branchList(), 'Όλα τα υποκαταστήματα'));
+  if (ACC_BRANCH) { bs.value = ACC_BRANCH; ACC_BRANCH = null; }
   const list = h('div');
   let offset = 0;
   async function load() {
-    const r = await api('accounts?limit=50&offset=' + offset + '&status=' + st.value + '&q=' + encodeURIComponent(q.value.trim()));
-    list.replaceChildren(table(['IBAN', 'Προϊόν', 'Δικαιούχος', 'Κατάσταση', '#Υπόλοιπο', '#Όριο', '#Δεδουλευμένοι'],
+    const r = await api('accounts?limit=50&offset=' + offset + '&status=' + st.value + '&branch=' + bs.value
+      + '&q=' + encodeURIComponent(q.value.trim()));
+    list.replaceChildren(table(['IBAN', 'Προϊόν', 'Δικαιούχος', 'Υποκ.', 'Κατάσταση', '#Υπόλοιπο', '#Όριο', '#Δεδουλευμένοι'],
       r.rows.map((a) => h('tr', { class: 'click', onclick: () => { location.hash = '#/account/' + a.id; } },
-        td(iban(a.iban), 'mono'), td(a.product), td(a.holder + (a.holders > 1 ? ' +' + (a.holders - 1) : '')),
+        td(iban(a.iban), 'mono'), td(a.product), td(a.holder + (a.holders > 1 ? ' +' + (a.holders - 1) : '')), td(a.branch_code),
         td(h('span', { class: 'badge ' + a.status }, STATUS[a.status])),
         h('td', { class: 'num' + (a.balance < 0 ? ' bad' : '') }, amt(a.balance, a.currency)), tdn(a.od_limit ? amt(a.od_limit, a.currency) : ''),
         tdn(num(a.accrued, 2))))),
@@ -350,7 +364,8 @@ async function accounts() {
   let timer;
   q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { offset = 0; load(); }, 250); });
   st.addEventListener('change', () => { offset = 0; load(); });
-  box.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', null, 'Λογαριασμοί'), q, st), list,
+  bs.addEventListener('change', () => { offset = 0; load(); });
+  box.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', null, 'Λογαριασμοί'), q, st, bs), list,
     h('p', { class: 'muted' }, 'Νέος λογαριασμός: από τη σελίδα του πελάτη.')));
   await load();
   setTimeout(() => q.focus(), 0);
@@ -366,6 +381,11 @@ async function account(id, tab) {
   if (can('MANAGER') && a.status !== 'C' && a.kind !== 'LN') {           // (a loan: from its own page)
     actions.append(
       h('button', { onclick: () => act('status', { status: a.status === 'O' ? 'B' : 'O' }) }, a.status === 'O' ? 'Δέσμευση' : 'Αποδέσμευση'),
+      h('button', { onclick: async () => {
+        const v = prompt('Μεταφορά στο υποκατάστημα (κωδικός): ' + (await branchList()).filter((b) => b.active === 'Y')
+          .map((b) => b.code + ' ' + b.name).join(', ') + '. Το IBAN μένει ίδιο.', a.branch_code);
+        if (v && v !== a.branch_code) act('branch', { branch: v.trim() });
+      } }, 'Υποκατάστημα'),
       h('button', { onclick: () => {
         const v = prompt('Νέο όριο υπερανάληψης (€)', a.od_limit);
         if (v != null) act('od-limit', { od_limit: Number(v.replace(',', '.')) });
@@ -381,7 +401,8 @@ async function account(id, tab) {
     h('h2', null, iban(a.iban), ' ', h('span', { class: 'badge ' + a.status }, STATUS[a.status])),
     h('p', { class: 'muted' }, a.product_name + ' (' + a.product + ')' + (a.name ? ' · ' + a.name : '') + ' · άνοιξε ' + date(a.opened_on)
       + (a.closed_on ? ' · έκλεισε ' + date(a.closed_on) : '')),
-    h('div', { class: 'kv' }, kv('Νόμισμα', a.currency), kv('Υπόλοιπο', amt(a.balance, a.currency)),
+    h('div', { class: 'kv' }, kv('Νόμισμα', a.currency), kv('Υποκατάστημα', a.branch_code + ' · ' + a.branch_name),
+      kv('Υπόλοιπο', amt(a.balance, a.currency)),
       kv('Διαθέσιμο', amt(a.available, a.currency)),
       kv('Όριο υπερανάληψης', amt(a.od_limit, a.currency)), kv('Δεδουλευμένοι τόκοι', amt(a.accrued, a.currency)),
       kv('Επιτόκιο τώρα', num(a.rate_now) + ' %'),
@@ -563,13 +584,20 @@ async function cardsTab(a) {
 
 // ---- the ATMs
 async function atms() {
-  const r = await api('atms');
+  const [r] = await Promise.all([api('atms'), branchList()]);
   const rows = r.atms;
   const box = h('div', { class: 'card' }, h('h2', null, 'ATM'),
     h('p', { class: 'muted' }, 'Τα ATM δίνουν χαρτονομίσματα των ' + r.notes.join(', ') + ' €, ως ' + r.max_notes + ' σε μία ανάληψη. '
       + 'Οι καταθέσεις πάνε σε δική τους θήκη και δεν ξαναδίνονται.'));
-  box.append(table(['Κωδικός', 'Όνομα', 'Διεύθυνση', 'Κασέτες', '#Μετρητά', '#Καταθέσεις', 'Κατάσταση', ''], rows.map((m) => h('tr', null,
+  box.append(table(['Κωδικός', 'Όνομα', 'Διεύθυνση', 'Υποκ.', 'Κασέτες', '#Μετρητά', '#Καταθέσεις', 'Κατάσταση', ''], rows.map((m) => h('tr', null,
     td(m.code, 'mono'), td(m.name), td(m.address),
+    td(can('MANAGER') ? (() => {
+      const s = sel('branch', branchOpts(BRANCHES || []), m.branch_code);
+      s.addEventListener('change', async () => {
+        try { await api('atms/' + m.code + '/branch', { branch: s.value }); toast('Το ATM ' + m.code + ': υποκατάστημα ' + s.value); } catch (e) { toast(e.message, true); }
+      });
+      return s;
+    })() : m.branch_code),
     td(m.cassettes.map((k) => h('div', { class: k.pieces === 0 ? 'warn' : null }, k.note + ' €: ' + k.pieces.toLocaleString('el-GR')))),
     tdn(eur(m.cash)), tdn(eur(m.deposits)), td(m.active === 'Y' ? 'Σε λειτουργία' : h('span', { class: 'muted' }, 'Εκτός')),
     td(h('a', { href: '/atm/?atm=' + m.code, target: '_blank', rel: 'noopener' }, 'Οθόνη ATM'))))));
@@ -879,6 +907,38 @@ async function loan(id) {
   return box;
 }
 
+// ---- the branches
+const CH = { BR: 'Γκισέ', ATM: 'ATM' };
+
+async function branches() {
+  BRANCHES = null;
+  const rows = await branchList();
+  const box = h('div');
+  box.append(h('div', { class: 'card' }, h('h2', null, 'Υποκαταστήματα'),
+    h('p', { class: 'muted' }, 'Ο κωδικός κάθε υποκαταστήματος είναι στο IBAN των λογαριασμών του. Το ταμείο: όσα μπήκαν στα γκισέ και στα ATM του μείον όσα βγήκαν, σε ευρώ.'),
+    table(['Κωδ.', 'Υποκατάστημα', 'Πόλη', 'Διεύθυνση', '#Λογαριασμοί', '#Χρήστες', '#ATM', '#Ταμείο', 'Ανά κανάλι', 'Ενεργό'],
+      rows.map((b) => h('tr', null, td(b.code, 'mono'),
+        td(h('a', { href: '#/accounts', onclick: () => { ACC_BRANCH = b.code; } }, b.name)),
+        td(b.city), td(b.address), tdn(b.accounts), tdn(b.users), tdn(b.atms), tdn(eur(b.cash)),
+        td(b.by_channel.map((x) => h('div', null, (CH[x.channel] || x.channel) + ': ' + eur(x.cash)
+          + (x.cash_today ? ' (σήμερα ' + eur(x.cash_today) + ')' : '')))),
+        td(b.active === 'Y' ? 'Ναι' : h('span', { class: 'badge no' }, 'Όχι')))))));
+  if (can('MANAGER')) {
+    box.append(h('div', { class: 'card' }, h('h2', null, 'Υποκατάστημα (νέο ή αλλαγή)'), form([
+      field('Κωδικός (4 ψηφία)', h('input', { name: 'code', required: true, maxlength: 4, inputmode: 'numeric' })),
+      field('Όνομα', h('input', { name: 'name', required: true })),
+      field('Πόλη', h('input', { name: 'city' })),
+      field('Διεύθυνση', h('input', { name: 'address' })),
+      field('Ενεργό', sel('active', { Y: 'Ναι', N: 'Όχι' }))], async (f) => {
+      await api('branches', values(f));
+      BRANCHES = null;
+      toast('Το υποκατάστημα αποθηκεύτηκε');
+      route();
+    }, 'Αποθήκευση')));
+  }
+  return box;
+}
+
 // ---- the currencies and their rates
 async function fx() {
   const r = await api('fx');
@@ -957,13 +1017,15 @@ async function day() {
 
 // ---- the users
 async function users() {
-  const rows = await api('users');
+  const [rows, brs] = await Promise.all([api('users'), branchList()]);
   const box = h('div');
   box.append(h('div', { class: 'card' }, h('h2', null, 'Χρήστες'),
-    table(['Χρήστης', 'Ονοματεπώνυμο', 'Ρόλος', 'Κατάσταση', 'Τελευταία είσοδος', ''], rows.map((u) => {
+    table(['Χρήστης', 'Ονοματεπώνυμο', 'Ρόλος', 'Υποκατάστημα', 'Κατάσταση', 'Τελευταία είσοδος', ''], rows.map((u) => {
       const role = sel('role', Object.fromEntries(ROLES.map((r) => [r, r])), u.role);
       role.addEventListener('change', () => change(u, { role: role.value }));
-      return h('tr', null, td(u.username, 'mono'), td(u.full_name), td(role),
+      const br = sel('branch', branchOpts(brs), u.branch_code);
+      br.addEventListener('change', () => change(u, { branch: br.value }));
+      return h('tr', null, td(u.username, 'mono'), td(u.full_name), td(role), td(br),
         td(u.locked === 'Y' ? h('span', { class: 'badge no' }, 'Κλειδωμένος') : u.active === 'Y' ? 'Ενεργός' : h('span', { class: 'muted' }, 'Ανενεργός')),
         td(u.last_login || '—'),
         td(h('div', { class: 'actions' },
@@ -981,6 +1043,7 @@ async function users() {
     field('Χρήστης', h('input', { name: 'username', required: true, autocomplete: 'off' })),
     field('Ονοματεπώνυμο', h('input', { name: 'full_name', required: true })),
     field('Ρόλος', sel('role', { TELLER: 'TELLER (γκισέ)', MANAGER: 'MANAGER', ADMIN: 'ADMIN' })),
+    field('Υποκατάστημα', sel('branch', branchOpts(brs))),
     field('Κωδικός', h('input', { name: 'password', type: 'password', required: true, minlength: 8, autocomplete: 'new-password' }))],
   async (f) => {
     await api('users', values(f));
