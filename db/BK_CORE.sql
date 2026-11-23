@@ -177,6 +177,32 @@ create or replace package bk_core as
   -- what was owed each day of the period, the purchases from their day), then their statement
   procedure cc_close_day(p_day date);
 
+  -- the loans (BK_LOAN): an account of a product of kind LN, its BALANCE below 0 what is owed; paid from an account
+  -- of the customer (in its currency). An index of the variable rates (EURIBOR3M) from a day on; its rate on a day.
+  -- A product of loans and its terms (again: changed)
+  procedure set_ln_index(p_code varchar2, p_day date, p_rate number);
+  function ln_index(p_code varchar2, p_day date default null) return number;
+  function set_ln_product(p_code varchar2, p_name varchar2, p_rate_type varchar2, p_rate number,
+                          p_index_code varchar2 default null, p_reset_months number default 3, p_late_add number default 2.5,
+                          p_late_fee number default 0, p_grace_days number default 5, p_prepay_pct number default 0,
+                          p_max_months number default 360) return number;
+  -- a loan for a customer: the amount paid to its account p_pay_account_id (which pays its installments), months,
+  -- the day of the month of its installments (1 .. 28; null: that of the business day); its schedule (annuity: the
+  -- interest of a month the balance x rate / 1200). Its account back
+  function ln_open(p_product_code varchar2, p_customer_id number, p_amount number, p_months number,
+                   p_pay_account_id number, p_pay_day number default null) return number;
+  -- a prepayment of its principal (none late): the interest of its days since the last installment and the fee of
+  -- the product, from its account; then p_mode T: the same installment, fewer of them; P: the same months, a
+  -- smaller installment. All of it (or more): paid off, closed. Its entry back
+  function ln_prepay(p_account_id number, p_amount number, p_mode varchar2 default 'T') return number;
+  -- what pays it off today: its principal, the interest of its days, the fee, what is due and not paid
+  function ln_payoff(p_account_id number) return number;
+  -- the end of a day for the loans (close_day calls it): the installments due that day (their interest booked; a
+  -- variable rate again, and the installments after it), collected from their account (as much as there is: again
+  -- every day); late after GRACE_DAYS (the late fee), late interest each day on what is late (booked at the end
+  -- of a month and when collected); a loan all paid: closed
+  procedure ln_close_day(p_day date);
+
 end bk_core;
 /
 
@@ -1100,7 +1126,7 @@ create or replace package body bk_core as
     with acc as (
       select a.id, a.product_id, a.currency, a.balance, p.day_basis, p.od_rate, nvl(a.accrued_to, a.opened_on - 1) at0
       from bk_account a join bk_product p on p.id = a.product_id
-      where a.id between p_lo and p_hi and a.status <> 'C' and a.opened_on <= p_day and p.kind <> 'CC'
+      where a.id between p_lo and p_hi and a.status <> 'C' and a.opened_on <= p_day and p.kind not in ('CC', 'LN')
         and nvl(a.accrued_to, a.opened_on - 1) < p_day and instr(p_caps, p.cap_every) > 0),
     -- the changes of its balance by value date after ACCRUED_TO (the later ones too: its balance is now)
     ev as (
@@ -1181,7 +1207,7 @@ create or replace package body bk_core as
        select id, gross, case when gross > 0 then round(gross * tax_rate / 100, 2) else 0 end, tax_rate, ' || seq || '.nextval
        from (select a.id, round(a.accrued, 2) gross, p.tax_rate
              from bk_account a join bk_product p on p.id = a.product_id
-             where a.id between :lo and :hi and a.status <> ''C'' and p.kind <> ''CC'' and instr(:caps, p.cap_every) > 0
+             where a.id between :lo and :hi and a.status <> ''C'' and p.kind not in (''CC'', ''LN'') and instr(:caps, p.cap_every) > 0
                and round(a.accrued, 2) <> 0)'
       using p_lo, p_hi, p_caps;
     -- (the words as int_descr: a function of the package is not called in SQL)
@@ -1295,6 +1321,10 @@ create or replace package body bk_core as
     if p_day is not null and trunc(p_day) <> d then
       fail(24, 'Κλείνει μόνο η εργάσιμη ημέρα ' || to_char(d, 'DD/MM/YYYY') || ', όχι η ' || to_char(p_day, 'DD/MM/YYYY'));
     end if;
+    -- the cards and the loans first: what they book today (an installment collected from an account) is in the
+    -- balance of the day of that account, when its interest is counted below
+    cc_close_day(d);
+    ln_close_day(d);
     if d = last_day(d) then
       caps := 'M' || case when to_char(d, 'MM') in ('03', '06', '09', '12') then 'Q' end
                   || case when to_char(d, 'MM') = '12' then 'Y' end;
@@ -1305,7 +1335,6 @@ create or replace package body bk_core as
         lo := lo + 200000;
       end loop;
     end if;
-    cc_close_day(d);
     insert into bk_day (day) values (d);
   end;
 
@@ -2003,6 +2032,376 @@ create or replace package body bk_core as
               order by c.account_id) loop
       cc_cycle(k.account_id, p_day);
     end loop;
+  end;
+
+  -- ---------------------------------------------------------------------------------------------
+  -- the loans
+  procedure set_ln_index(p_code varchar2, p_day date, p_rate number) is
+  begin
+    if p_code is null or p_day is null or p_rate is null or p_rate not between -5 and 50 then
+      fail(59, 'Ο δείκτης: κωδικός, ημέρα, επιτόκιο -5 ως 50 %');
+    end if;
+    merge into bk_ln_index x
+    using (select upper(p_code) code, trunc(p_day) day from dual) v on (x.code = v.code and x.day = v.day)
+    when matched then update set rate = p_rate
+    when not matched then insert (code, day, rate) values (v.code, v.day, p_rate);
+  end;
+
+  function ln_index(p_code varchar2, p_day date default null) return number is
+    v number;
+    d date := trunc(nvl(p_day, open_day));
+  begin
+    select max(rate) keep (dense_rank last order by day) into v from bk_ln_index where code = upper(p_code) and day <= d;
+    if v is null then
+      fail(59, 'Δεν υπάρχει τιμή του δείκτη ' || p_code || ' για τις ' || to_char(d, 'DD/MM/YYYY'));
+    end if;
+    return v;
+  end;
+
+  function set_ln_product(p_code varchar2, p_name varchar2, p_rate_type varchar2, p_rate number,
+                          p_index_code varchar2 default null, p_reset_months number default 3, p_late_add number default 2.5,
+                          p_late_fee number default 0, p_grace_days number default 5, p_prepay_pct number default 0,
+                          p_max_months number default 360) return number is
+    id_ number;
+    k varchar2(3);
+    v number;
+  begin
+    if p_code is null or p_name is null or nvl(p_rate_type, '-') not in ('F', 'V') or nvl(p_rate, -1) < 0
+       or (p_rate_type = 'V' and p_index_code is null) or nvl(p_reset_months, 0) not between 1 and 12
+       or nvl(p_late_add, -1) not between 0 and 10 or nvl(p_late_fee, -1) < 0 or nvl(p_grace_days, -1) not between 0 and 30
+       or nvl(p_prepay_pct, -1) not between 0 and 10 or nvl(p_max_months, 0) not between 1 and 480 then
+      fail(56, 'Όροι δανείου: κωδικός, όνομα, επιτόκιο F σταθερό ή V κυμαινόμενο (με δείκτη: το επιτόκιο το περιθώριο), '
+               || 'αναπροσαρμογή 1 - 12 μήνες, υπερημερία 0 - 10 %, προθεσμία 0 - 30 ημέρες, προμήθεια πρόωρης 0 - 10 %, '
+               || 'ως 480 μήνες');
+    end if;
+    if p_rate_type = 'V' then
+      v := ln_index(p_index_code);                 -- (a rate of it there)
+    end if;
+    begin
+      select id, kind into id_, k from bk_product where code = upper(p_code);
+      if k <> 'LN' then
+        fail(55, 'Το προϊόν ' || upper(p_code) || ' δεν είναι δανείου');
+      end if;
+      update bk_product set name = p_name where id = id_;
+    exception
+      when no_data_found then
+        insert into bk_product (code, name, kind, day_basis, tax_rate, od_rate) values (upper(p_code), p_name, 'LN', '30360', 0, 0)
+        returning id into id_;
+    end;
+    merge into bk_ln_product x
+    using (select id_ product_id from dual) v on (x.product_id = v.product_id)
+    when matched then update set rate_type = p_rate_type, rate = p_rate, index_code = upper(p_index_code),
+                                 reset_months = p_reset_months, late_add = p_late_add, late_fee = p_late_fee,
+                                 grace_days = p_grace_days, prepay_pct = p_prepay_pct, max_months = p_max_months
+    when not matched then insert (product_id, rate_type, rate, index_code, reset_months, late_add, late_fee, grace_days,
+                                  prepay_pct, max_months)
+                          values (id_, p_rate_type, p_rate, upper(p_index_code), p_reset_months, p_late_add, p_late_fee,
+                                  p_grace_days, p_prepay_pct, p_max_months);
+    return id_;
+  end;
+
+  function loan_row(p_account_id number) return bk_loan%rowtype is
+    l bk_loan%rowtype;
+  begin
+    select * into l from bk_loan where account_id = p_account_id;
+    return l;
+  exception
+    when no_data_found then
+      fail(55, 'Ο λογαριασμός ' || p_account_id || ' δεν είναι δανείου');
+  end;
+
+  function ln_terms(p_account_id number) return bk_ln_product%rowtype is
+    t bk_ln_product%rowtype;
+  begin
+    select x.* into t from bk_ln_product x join bk_account a on a.product_id = x.product_id where a.id = p_account_id;
+    return t;
+  end;
+
+  -- the installment of an annuity: p_balance in p_count months at p_rate % a year
+  function annuity(p_balance number, p_rate number, p_count number) return number is
+    r number := p_rate / 1200;
+  begin
+    if r = 0 then
+      return round(p_balance / p_count, 2);
+    end if;
+    return round(p_balance * r / (1 - power(1 + r, -p_count)), 2);
+  end;
+
+  -- the installments of a loan from n p_n0 on, the first due p_due0, of p_balance at p_rate: p_count of them (an
+  -- annuity), or (p_payment) of that installment, as many as it takes; the last one what is left
+  procedure ln_schedule(p_account_id number, p_n0 number, p_due0 date, p_balance number, p_rate number,
+                        p_count number, p_payment number default null) is
+    r number := p_rate / 1200;
+    pay number := p_payment;
+    cnt number := p_count;
+    bal number := p_balance;
+    i_ number;
+    p_ number;
+  begin
+    if pay is null then
+      pay := annuity(p_balance, p_rate, cnt);
+    elsif r = 0 then
+      cnt := ceil(p_balance / pay);
+    elsif p_balance * r >= pay then
+      fail(58, 'Η δόση δεν φτάνει ούτε για τους τόκους');
+    else
+      cnt := ceil(-ln(1 - p_balance * r / pay) / ln(1 + r) - 0.0000001);
+    end if;
+    for k in 1 .. cnt loop
+      i_ := round(bal * r, 2);
+      p_ := case when k = cnt then bal else least(pay - i_, bal) end;
+      bal := bal - p_;
+      insert into bk_ln_schedule (account_id, n, due_date, rate, principal, interest, payment, balance)
+      values (p_account_id, p_n0 + k - 1, add_months(p_due0, k - 1), p_rate, p_, i_, p_ + i_, bal);
+      exit when bal = 0;
+    end loop;
+  end;
+
+  -- the principal left of a loan: after its last installment that fell due (or paid before), else all of it
+  function ln_left(p_account_id number) return number is
+    v number;
+  begin
+    select max(balance) keep (dense_rank last order by n) into v from bk_ln_schedule
+    where account_id = p_account_id and status <> 'D';
+    return nvl(v, loan_row(p_account_id).principal);
+  end;
+
+  function ln_open(p_product_code varchar2, p_customer_id number, p_amount number, p_months number,
+                   p_pay_account_id number, p_pay_day number default null) return number is
+    t bk_ln_product%rowtype;
+    p bk_product%rowtype;
+    b bk_account%rowtype;
+    a number;
+    e number;
+    n number;
+    rate_ number;
+    pd number := nvl(p_pay_day, least(to_number(to_char(open_day, 'DD')), 28));
+    first_ date;
+  begin
+    begin
+      select * into p from bk_product where code = upper(p_product_code) and kind = 'LN';
+      select * into t from bk_ln_product where product_id = p.id;
+    exception
+      when no_data_found then fail(55, 'Το προϊόν ' || p_product_code || ' δεν είναι δανείου');
+    end;
+    amount_ok(p_amount);
+    if nvl(p_months, 0) not between 1 and t.max_months or p_months <> trunc(p_months) then
+      fail(56, 'Η διάρκεια του δανείου: 1 ως ' || t.max_months || ' μήνες');
+    end if;
+    if pd not between 1 and 28 or pd <> trunc(pd) then
+      fail(56, 'Η ημέρα της δόσης: 1 - 28 του μήνα');
+    end if;
+    -- the account it is paid to and from: of the customer, open, not of a card or of a loan
+    b := account_row(p_pay_account_id);
+    select count(*) into n from bk_holder h join bk_product x on x.id = b.product_id
+    where h.account_id = b.id and h.customer_id = p_customer_id and x.kind not in ('CC', 'LN');
+    if n = 0 or b.status <> 'O' then
+      fail(57, 'Ο λογαριασμός της δόσης: ανοιχτός λογαριασμός του πελάτη (όχι κάρτας ή δανείου)');
+    end if;
+    rate_ := case t.rate_type when 'V' then greatest(ln_index(t.index_code) + t.rate, 0) else t.rate end;
+    a := open_account(p.code, p_customer_id, 0, null, b.currency);
+    first_ := trunc(add_months(open_day, 1), 'MM') + pd - 1;
+    insert into bk_loan (account_id, pay_account_id, principal, months, start_date, pay_day, rate, next_reset)
+    values (a, b.id, p_amount, p_months, open_day, pd, rate_,
+            -- (variable: again at the last installment of each period of it: of 3 months, at the 3rd, the 6th, ...)
+            case when t.rate_type = 'V' then add_months(first_, t.reset_months - 1) end);
+    ln_schedule(a, 1, first_, p_amount, rate_, p_months);
+    -- paid to its account
+    lock_accounts(a, b.id);
+    e := new_entry('TRF', null, 'Εκταμίευση δανείου ' || account_row(a).iban, null, 'SYS');
+    line(e, a, null, p_amount, 0);
+    line(e, b.id, null, 0, p_amount, 'TRI');
+    return a;
+  end;
+
+  -- an entry of a loan: its interest (INT, to LN_INT) or a fee (FEE, to FEE), debited to it
+  procedure ln_charge(p_account_id number, p_kind varchar2, p_amount number, p_descr varchar2) is
+    e number;
+  begin
+    if p_amount > 0 then
+      e := new_entry(p_kind, null, p_descr, null, 'SYS');
+      line(e, p_account_id, null, p_amount, 0, case when p_kind = 'FEE' then 'FEE' end);
+      line(e, null, case when p_kind = 'FEE' then 'FEE' else 'LN_INT' end, 0, p_amount);
+    end if;
+  end;
+
+  -- what is due of an installment, collected from the account of the loan: as much as it has
+  procedure ln_collect(p_account_id number, p_n number) is
+    l bk_loan%rowtype := loan_row(p_account_id);
+    s bk_ln_schedule%rowtype;
+    b bk_account%rowtype;
+    x number;
+    e number;
+  begin
+    lock_accounts(p_account_id, l.pay_account_id);
+    select * into s from bk_ln_schedule where account_id = p_account_id and n = p_n;
+    -- (late: its late interest accrued booked first)
+    if s.status = 'L' then
+      x := round(s.late_int, 2) - s.late_booked;
+      if x > 0 then
+        ln_charge(p_account_id, 'INT', x, 'Τόκοι υπερημερίας δόσης ' || p_n);
+        update bk_ln_schedule set late_booked = late_booked + x where account_id = p_account_id and n = p_n;
+        s.late_booked := s.late_booked + x;
+      end if;
+    end if;
+    b := account_row(l.pay_account_id);
+    x := least(s.payment + s.late_fee + s.late_booked - s.paid,
+               case when b.status = 'O' then greatest(b.balance + b.od_limit, 0) else 0 end);
+    if x > 0 then
+      e := new_entry('TRF', null, 'Δόση ' || p_n || ' δανείου ' || account_row(p_account_id).iban, null, 'SYS');
+      line(e, l.pay_account_id, null, x, 0, 'TRO');
+      line(e, p_account_id, null, 0, x, 'TRI');
+      update bk_ln_schedule set paid = paid + x,
+             status = case when paid + x >= payment + late_fee + late_booked then 'P' else status end,
+             paid_on = case when paid + x >= payment + late_fee + late_booked then open_day end
+      where account_id = p_account_id and n = p_n;
+    end if;
+  end;
+
+  -- a loan all paid (nothing to come, nothing due): closed
+  procedure ln_done(p_account_id number) is
+    n number;
+  begin
+    select count(*) into n from bk_ln_schedule where account_id = p_account_id and status <> 'P';
+    if n = 0 and account_row(p_account_id).balance = 0 then
+      update bk_loan set status = 'C' where account_id = p_account_id;
+      close_account(p_account_id);
+    end if;
+  end;
+
+  procedure ln_close_day(p_day date) is
+    t bk_ln_product%rowtype;
+    l bk_loan%rowtype;
+    r number;
+    cnt number;
+    due0 date;
+    x number;
+  begin
+    -- the installments due today: their interest; a variable rate again (the installments after it again)
+    for s in (select account_id, n, due_date, interest, balance from bk_ln_schedule
+              where status = 'D' and due_date <= p_day order by account_id, n) loop
+      lock_account(s.account_id);
+      ln_charge(s.account_id, 'INT', s.interest, 'Τόκοι δόσης ' || s.n);
+      update bk_ln_schedule set status = 'O' where account_id = s.account_id and n = s.n;
+      l := loan_row(s.account_id);
+      t := ln_terms(s.account_id);
+      if t.rate_type = 'V' and l.next_reset <= s.due_date then
+        r := greatest(ln_index(t.index_code, p_day) + t.rate, 0);
+        select count(*), min(due_date) into cnt, due0 from bk_ln_schedule where account_id = s.account_id and status = 'D';
+        if cnt > 0 and r <> l.rate then
+          delete from bk_ln_schedule where account_id = s.account_id and status = 'D';
+          ln_schedule(s.account_id, s.n + 1, due0, s.balance, r, cnt);
+        end if;
+        update bk_loan set rate = r, next_reset = add_months(next_reset, t.reset_months) where account_id = s.account_id;
+      end if;
+    end loop;
+    -- what is due: collected; late after its days of grace (the fee)
+    for s in (select account_id, n from bk_ln_schedule where status in ('O', 'L') order by account_id, n) loop
+      ln_collect(s.account_id, s.n);
+    end loop;
+    for s in (select s.account_id, s.n, x.late_fee from bk_ln_schedule s, bk_account a, bk_ln_product x
+              where s.status = 'O' and s.due_date + x.grace_days <= p_day and a.id = s.account_id
+                and x.product_id = a.product_id order by s.account_id, s.n) loop
+      lock_account(s.account_id);
+      ln_charge(s.account_id, 'FEE', s.late_fee, 'Καθυστέρηση δόσης ' || s.n);
+      update bk_ln_schedule set status = 'L', late_fee = late_fee + s.late_fee where account_id = s.account_id and n = s.n;
+    end loop;
+    -- the late interest of the day on what is late (the rate of the loan and LATE_ADD); booked at the end of a month
+    for s in (select s.account_id, s.n, s.payment + s.late_fee + s.late_booked - s.paid owed, l.rate + x.late_add r
+              from bk_ln_schedule s, bk_loan l, bk_account a, bk_ln_product x
+              where s.status = 'L' and l.account_id = s.account_id and a.id = s.account_id and x.product_id = a.product_id) loop
+      update bk_ln_schedule set late_int = late_int + round(s.owed * s.r / 36000, 6) where account_id = s.account_id and n = s.n;
+    end loop;
+    if p_day = last_day(p_day) then
+      for s in (select account_id, n, round(late_int, 2) - late_booked x from bk_ln_schedule
+                where status = 'L' and round(late_int, 2) > late_booked order by account_id, n) loop
+        lock_account(s.account_id);
+        ln_charge(s.account_id, 'INT', s.x, 'Τόκοι υπερημερίας δόσης ' || s.n);
+        update bk_ln_schedule set late_booked = late_booked + s.x where account_id = s.account_id and n = s.n;
+      end loop;
+    end if;
+    for k in (select l.account_id from bk_loan l where l.status = 'A'
+              and not exists (select 1 from bk_ln_schedule s where s.account_id = l.account_id and s.status <> 'P')
+              order by l.account_id) loop
+      ln_done(k.account_id);
+    end loop;
+  end;
+
+  -- the days of interest of a prepayment: since the last installment due (or the start)
+  function ln_days(p_account_id number) return number is
+    d date;
+  begin
+    select max(due_date) into d from bk_ln_schedule where account_id = p_account_id and status <> 'D';
+    return greatest(open_day - nvl(d, loan_row(p_account_id).start_date), 0);
+  end;
+
+  function ln_payoff(p_account_id number) return number is
+    l bk_loan%rowtype := loan_row(p_account_id);
+    t bk_ln_product%rowtype := ln_terms(p_account_id);
+    b number := ln_left(p_account_id);
+    due_ number;
+  begin
+    if l.status = 'C' then
+      return 0;
+    end if;
+    select nvl(sum(payment + late_fee + round(late_int, 2) - paid), 0) into due_
+    from bk_ln_schedule where account_id = p_account_id and status in ('O', 'L');
+    return b + round(b * l.rate / 36000 * ln_days(p_account_id), 2) + round(b * t.prepay_pct / 100, 2) + due_;
+  end;
+
+  function ln_prepay(p_account_id number, p_amount number, p_mode varchar2 default 'T') return number is
+    l bk_loan%rowtype := loan_row(p_account_id);
+    t bk_ln_product%rowtype := ln_terms(p_account_id);
+    b number;
+    a number;
+    int_ number;
+    fee number;
+    n number;
+    cnt number;
+    due0 date;
+    pay number;
+    nn number;
+    e number;
+  begin
+    if l.status = 'C' then
+      fail(55, 'Το δάνειο έχει εξοφληθεί');
+    end if;
+    if nvl(p_mode, '-') not in ('T', 'P') then
+      fail(58, 'Πρόωρη εξόφληση: T (ίδια δόση, λιγότερες) ή P (ίδιοι μήνες, μικρότερη δόση)');
+    end if;
+    amount_ok(p_amount);
+    lock_accounts(p_account_id, l.pay_account_id);
+    select count(*) into n from bk_ln_schedule where account_id = p_account_id and status in ('O', 'L');
+    if n > 0 then
+      fail(58, 'Πρώτα οι δόσεις που οφείλονται (' || n || ')');
+    end if;
+    b := ln_left(p_account_id);
+    a := least(p_amount, b);
+    int_ := round(a * l.rate / 36000 * ln_days(p_account_id), 2);
+    fee := round(a * t.prepay_pct / 100, 2);
+    out_ok(l.pay_account_id, a + int_ + fee);
+    select nvl(max(n), 0) + 1 into nn from bk_ln_schedule where account_id = p_account_id and status <> 'D';
+    select count(*), min(due_date), max(payment) keep (dense_rank first order by n)
+    into cnt, due0, pay from bk_ln_schedule where account_id = p_account_id and status = 'D';
+    delete from bk_ln_schedule where account_id = p_account_id and status = 'D';
+    -- the prepayment: an installment of its own, paid (its fee in it), then the rest of the schedule again
+    insert into bk_ln_schedule (account_id, n, due_date, rate, principal, interest, payment, balance, status, paid, paid_on, late_fee)
+    values (p_account_id, nn, open_day, l.rate, a, int_, a + int_, b - a, 'P', a + int_ + fee, open_day, fee);
+    ln_charge(p_account_id, 'INT', int_, 'Τόκοι πρόωρης εξόφλησης');
+    ln_charge(p_account_id, 'FEE', fee, 'Προμήθεια πρόωρης εξόφλησης');
+    e := new_entry('TRF', null, 'Πρόωρη εξόφληση δανείου ' || account_row(p_account_id).iban, null, 'SYS');
+    line(e, l.pay_account_id, null, a + int_ + fee, 0, 'TRO');
+    line(e, p_account_id, null, 0, a + int_ + fee, 'TRI');
+    if b - a > 0 then
+      if p_mode = 'T' then
+        ln_schedule(p_account_id, nn + 1, due0, b - a, l.rate, null, pay);
+      else
+        ln_schedule(p_account_id, nn + 1, due0, b - a, l.rate, cnt);
+      end if;
+    else
+      ln_done(p_account_id);
+    end if;
+    return e;
   end;
 
 end bk_core;

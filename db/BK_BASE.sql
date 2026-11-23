@@ -12,7 +12,8 @@ select v.code, v.name, v.kind from (values
   ('CC_MERCH', 'Αγορές με πιστωτικές κάρτες (προς εκκαθάριση)', 'L'),
   ('CC_INT',  'Τόκοι πιστωτικών καρτών (έσοδο)',         'I'),
   ('FX_POS',  'Θέση συναλλάγματος',                      'A'),
-  ('FX_INC',  'Έσοδα από συνάλλαγμα',                    'I')
+  ('FX_INC',  'Έσοδα από συνάλλαγμα',                    'I'),
+  ('LN_INT',  'Τόκοι δανείων (έσοδο)',                   'I')
 ) v (code, name, kind)
 where not exists (select 1 from bk_gl g where g.code = v.code);
 
@@ -95,6 +96,25 @@ select a.id, v.note, v.pieces from (values
 ) v (code, note, pieces)
 join bk_atm a on a.code = v.code
 where not exists (select 1 from bk_atm_note n where n.atm_id = a.id);
+commit;
+
+-- the loans: an index (Euribor 3 months) from the start, the products and their terms (BK_LN_PRODUCT)
+insert into bk_ln_index (code, day, rate)
+select 'EURIBOR3M', date '2020-01-01', 2.5 from dual
+where not exists (select 1 from bk_ln_index where code = 'EURIBOR3M');
+insert into bk_product (code, name, kind, day_basis, cap_every, tax_rate, od_rate)
+select v.code, v.name, 'LN', '30360', 'M', 0, 0 from (values
+  ('HOME', 'Στεγαστικό δάνειο (κυμαινόμενο)'),
+  ('CONS', 'Καταναλωτικό δάνειο (σταθερό)')
+) v (code, name)
+where not exists (select 1 from bk_product p where p.code = v.code);
+insert into bk_ln_product (product_id, rate_type, rate, index_code, reset_months, late_add, late_fee, grace_days, prepay_pct, max_months)
+select p.id, v.rt, v.rate, v.idx, v.reset, v.late_add, v.fee, v.grace, v.prepay, v.mx from (values
+  ('HOME', 'V', 2.20, 'EURIBOR3M', 3, 2.5, 20, 5, 0, 360),
+  ('CONS', 'F', 9.50, null, 3, 2.5, 15, 5, 1, 84)
+) v (code, rt, rate, idx, reset, late_add, fee, grace, prepay, mx)
+join bk_product p on p.code = v.code
+where not exists (select 1 from bk_ln_product x where x.product_id = p.id);
 commit;
 
 -- the currencies each product opens in (the first: by default), and its rates in the others; a product with
