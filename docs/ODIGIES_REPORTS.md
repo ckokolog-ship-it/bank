@@ -41,6 +41,31 @@ cd ~/bank/reports && ./build_reports.sh                  # XML -> .rdf στο /u
 cd ~/bank/forms && ./build_forms.sh /@BK_DB BK_ACCOUNTS    # τα νέα κουμπιά της φόρμας
 ```
 
+### Τα ελληνικά στο PDF (μία φορά)
+
+Όταν το HTML βγαίνει σωστό και το PDF έχει «ιερογλυφικά», φταίει η γραμματοσειρά του PDF:
+- **Γιατί:** οι γραμματοσειρές που έχει μέσα του ένα PDF δεν έχουν ελληνικά, και ο Reports Server βάζει στη θέση τους μια TrueType, σύμφωνα με το `uifont.ali` (`[ PDF:Subset ]`). Τα reports ζητούν `Arial`, που στο Linux δεν αντιστοιχίζεται πουθενά.
+- **Τι κάνει το `pdf_fonts.sh`:**
+  - αντιστοιχίζει το `Arial` στο DejaVu Sans, που έχει ελληνικά (και τα έντονα στο DejaVu Sans Bold), όπως και τα `Helvetica`, `Courier`, `Courier New`·
+  - βάζει τις γραμματοσειρές στο `/u01/app/oracle/fonts`·
+  - ελέγχει το περιβάλλον του `WLS_REPORTS` (`REPORTS_FONT_DIRECTORY`, `TK_FONTALIAS`, `NLS_LANG`) στο `setUserOverrides.sh`·
+  - κρατά πρώτα αντίγραφο κάθε αρχείου που αλλάζει (`.bk-<ημερομηνία>`), και μια δεύτερη εκτέλεση δεν αλλάζει τίποτα.
+
+```bash
+# ως chris, μία φορά: οι γραμματοσειρές DejaVu, και το pdffonts για τον έλεγχο
+sudo dnf -y install dejavu-sans-fonts dejavu-sans-mono-fonts poppler-utils
+sudo -iu oracle ~oracle/bank/reports/pdf_fonts.sh
+sudo systemctl restart weblogic-forms
+sudo -iu oracle ~oracle/bank/reports/pdf_fonts.sh --check     # μετά από λίγα λεπτά
+```
+
+Το `--check` δείχνει:
+- το περιβάλλον του `WLS_REPORTS`·
+- τις αντιστοιχίσεις του `uifont.ali`·
+- τις γραμματοσειρές ενός PDF του `BK_STATEMENT`. Σωστό είναι `DejaVuSans` με `emb yes`.
+
+Τα reports δεν χρειάζεται να ξαναχτιστούν. Η ίδια αντιστοίχιση διορθώνει και τα PDF του mini market, που ζητούν επίσης `Arial`.
+
 Αν δεν υπάρχει οθόνη από το session, το `build_reports.sh` χρησιμοποιεί εικονική (`xvfb-run`), όπως και το `build_forms.sh`. Με `XML_DISPLAY=session` ή `XML_DISPLAY=xvfb` διαλέγεις ποια από τις δύο.
 
 Δοκιμή με το χέρι, στον browser:
