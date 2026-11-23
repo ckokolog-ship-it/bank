@@ -5,6 +5,7 @@ cash of each branch; a branch not active: no new account in it; BK_CHECK empty.
 
     BANK_DSN=bank/<password>@localhost:1521/FREEPDB1 python3 -m pytest -q tests
 """
+import datetime
 import hashlib
 import os
 
@@ -114,3 +115,36 @@ def test_the_branch_of_an_atm(br):
     db.fails(160, 'set_atm_branch', 'ATM99', '9001', rtype=None)
     db.fails(160, 'set_user_branch', 'nobody-x', '9001', rtype=None)
     db.check()
+
+
+def test_the_branch_in_the_reports(br):
+    """the line of the branch in the reports of an account; the cash of a branch (BK_BR_CASH, P_KIND B): each day by
+    channel, in less out, the running cash as BK_BRANCH_CASH has it"""
+    db = br
+    db.proc('set_branch', '9301', 'Test ταμείο', 'Λάρισα')
+    db.cur.execute("begin bk_core.set_branch_context('9301'); end;")
+    a = acct(db, '9301', 500)
+    db.fn('withdraw', int, a, 120)
+    db.cur.execute("begin bk_core.set_branch_context(null); end;")
+    db.conn.commit()
+    for k in ('S', 'I'):
+        assert db.one('select bk_report.branch(:k, :a) from dual', k=k, a=a)[0] == 'Υποκ. 9301 · Test ταμείο'
+    assert db.one("select bk_report.branch('B', 9301) from dual")[0] is None
+    assert db.one("select bk_report.title('B', 9301) from dual")[0] == 'Ταμείο υποκαταστήματος 9301  ·  Test ταμείο  ·  Λάρισα'
+    assert db.one("select bk_report.label('BALANCE', 'B') from dual")[0] == 'Ταμείο'
+    day = db.one('select nvl(max(day) + 1, trunc(sysdate)) from bk_day')[0]
+    db.cur.execute('select ldate, doc_text, descr, debit, credit, balance, prior_balance from '
+                   "table(bk_report.report_rows('B', 9301, date '2000-01-01', :d)) order by seq", d=day)
+    rs = db.cur.fetchall()
+    total = db.one("select sum(cash) from bk_branch_cash where branch_code = '9301'")[0]
+    assert rs[-1][5] == pytest.approx(total)
+    for r in rs:
+        assert r[5] == pytest.approx(r[6] + (r[3] or 0) - (r[4] or 0))
+    today = [r for r in rs if r[0] == day and r[1] == 'Γκισέ']
+    assert today and today[0][3] >= 500 and today[0][4] >= 120 and 'κινήσεις μετρητών' in today[0][2]
+    # before the period: its cash the first balance
+    db.cur.execute("select prior_balance from table(bk_report.report_rows('B', 9301, :d1, :d2)) order by seq",
+                   d1=day + datetime.timedelta(days=1), d2=day + datetime.timedelta(days=2))
+    assert db.cur.fetchall() == [(pytest.approx(total),)]
+    with pytest.raises(Exception, match='BK-160'):
+        db.cur.execute("select * from table(bk_report.report_rows('B', 9999, :d, :d))", d=day).fetchall()

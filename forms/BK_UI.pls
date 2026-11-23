@@ -34,6 +34,16 @@ PACKAGE BODY ui IS
   g_uid NUMBER;
   g_master NUMBER;                  -- the master whose detail is on the screen
   g_detail NUMBER;                  -- the record of the detail whose own detail is on the screen
+  g_branch VARCHAR2(4);             -- the master block of one branch only (CTL.FILTERBR), else all
+
+  -- the WHERE of the master block: its own, and of one branch if so (a code of BK_BRANCH: 4 digits)
+  FUNCTION the_where RETURN VARCHAR2 IS
+  BEGIN
+    IF g_branch IS NULL THEN
+      RETURN c_where;
+    END IF;
+    RETURN CASE WHEN c_where IS NOT NULL THEN '(' || c_where || ') AND ' END || 'branch_code = ''' || g_branch || '''';
+  END;
 
   FUNCTION num(p_item VARCHAR2) RETURN NUMBER IS
   BEGIN
@@ -130,7 +140,7 @@ PACKAGE BODY ui IS
   PROCEDURE requery IS
   BEGIN
     go_block(c_block);
-    set_block_property(c_block, DEFAULT_WHERE, c_where);
+    set_block_property(c_block, DEFAULT_WHERE, the_where);
     g_master := NULL;
     execute_query;
   END;
@@ -142,7 +152,7 @@ PACKAGE BODY ui IS
     set_block_property(c_block, DEFAULT_WHERE, 'id = ' || to_char(p_id));
     g_master := NULL;
     execute_query;
-    set_block_property(c_block, DEFAULT_WHERE, c_where);
+    set_block_property(c_block, DEFAULT_WHERE, the_where);
   END;
 
   -- the account of BK_MOVE: its balance, what is available, its last moves
@@ -231,7 +241,7 @@ PACKAGE BODY ui IS
     NULL; -- ROLES
     IF c_block IS NOT NULL THEN          -- (the menu has no block of a table)
       go_block(c_block);
-      set_block_property(c_block, DEFAULT_WHERE, c_where);
+      set_block_property(c_block, DEFAULT_WHERE, the_where);
       execute_query;
     END IF;
     init_form;
@@ -739,6 +749,23 @@ PACKAGE BODY ui IS
       show_only(acc);
       message('Ο λογαριασμός μεταφέρθηκε: το IBAN μένει ίδιο');
 
+    -- BK_ACCOUNTS, BK_CCARDS, BK_LOANS: the list of one branch only (empty: all of them)
+    ELSIF p_item = 'CTL.FILTERBR' THEN
+      k := name_in('CTL.F_BRANCH');
+      IF k IS NOT NULL THEN
+        SELECT count(*) INTO id_ FROM bk_branch WHERE code = k;
+        IF id_ = 0 THEN
+          fail('Δεν υπάρχει υποκατάστημα ' || k);
+        END IF;
+      END IF;
+      g_branch := k;
+      requery;
+      IF k IS NULL THEN
+        message('Όλα τα υποκαταστήματα');
+      ELSE
+        message('Μόνο το υποκατάστημα ' || k);
+      END IF;
+
     -- BK_BRANCHES: a branch new or changed; the one on the screen active or not
     ELSIF p_item = 'CTL.SAVEBR' THEN
       k := name_in('CTL.S_CODE');
@@ -747,6 +774,16 @@ PACKAGE BODY ui IS
       forms_ddl('COMMIT');
       show_only(to_number(k));
       message('Το υποκατάστημα ' || k || ' αποθηκεύτηκε');
+    ELSIF p_item = 'CTL.PRINTCASH' THEN
+      k := name_in('BR.CODE');
+      IF k IS NULL THEN
+        fail('Πρώτα ένα υποκατάστημα στην οθόνη');
+      END IF;
+      IF name_in('CTL.P_FROM') IS NULL OR name_in('CTL.P_TO') IS NULL OR date_in('CTL.P_FROM') > date_in('CTL.P_TO') THEN
+        fail('Το διάστημα: από - έως (ΗΗ/ΜΜ/ΕΕΕΕ)');
+      END IF;
+      open_report('BK_BR_CASH', '&P_KIND=B&P_ACCOUNT=' || to_number(k) || '&P_FROM='
+                  || to_char(date_in('CTL.P_FROM'), 'DD/MM/YYYY') || '&P_TO=' || to_char(date_in('CTL.P_TO'), 'DD/MM/YYYY'));
     ELSIF p_item = 'CTL.TOGGLEBR' THEN
       id_ := num('BR.ID');
       IF id_ IS NULL THEN
@@ -867,7 +904,7 @@ PACKAGE BODY ui IS
     ELSIF p_item = 'CTL.ALL' THEN
       copy('', 'CTL.FIND_TEXT');
       go_block(c_block);
-      set_block_property(c_block, DEFAULT_WHERE, c_where);
+      set_block_property(c_block, DEFAULT_WHERE, the_where);
       g_master := NULL;
       execute_query;
     ELSE

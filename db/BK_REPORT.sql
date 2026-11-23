@@ -9,6 +9,9 @@
 --   P_KIND L  the schedule of a loan (BK_LN_SCHEDULE): its installments due in the period, the interest as debit,
 --             the principal as credit, the balance the principal left; before them its principal (less what was
 --             paid of it before the period); under the title its principal, months, rate and day
+--   P_KIND B  the cash of a branch (BK_BR_CASH; P_ACCOUNT the code of the branch as a number: 2 for 0002): its
+--             cash in and out of each day of the period by channel (the counter, its ATMs), in euro (the CASH
+--             lines in base); the running balance the cash of the branch; before them its cash before the period
 --   P_KIND I  its interest (BK_INTEREST): the stretches of the period (balance x rate x days / days of the year)
 --             as credit, the capitalizations as debit (gross; its tax in the words), the running balance: the
 --             interest accrued and not capitalized yet; before them the accrued before the period
@@ -38,6 +41,8 @@ create or replace package bk_report as
   function label(p_key varchar2, p_kind varchar2 default null) return varchar2;
   -- the line under the title: the period (C: the statement of that day, its minimum and its due date)
   function period(p_kind varchar2, p_account_id number, p_from date, p_to date) return varchar2;
+  -- the branch of the account, on the right of that line (B: none, it is in the title)
+  function branch(p_kind varchar2, p_account_id number) return varchar2;
 end bk_report;
 /
 
@@ -65,7 +70,8 @@ create or replace package body bk_report as
     n pls_integer := 0;
     a number;
     k varchar2(1) := upper(p_kind);
-    sg number := case when upper(p_kind) = 'C' then -1 else 1 end;     -- (C: the balance what is owed)
+    sg number := case when upper(p_kind) in ('C', 'B') then -1 else 1 end;  -- (C: what is owed; B: in less out)
+    br varchar2(4) := case when upper(p_kind) = 'B' then lpad(to_char(p_account_id), 4, '0') end;
 
     procedure out_(p_date date, p_doc varchar2, p_descr varchar2, p_debit number, p_credit number) is
     begin
@@ -91,11 +97,34 @@ create or replace package body bk_report as
       r.cum_credit := csum;
     end;
   begin
-    select count(*) into a from bk_account where id = p_account_id;
-    if a = 0 then
-      raise_application_error(-20108, 'BK-108: Δεν υπάρχει λογαριασμός ' || p_account_id);
+    if k = 'B' then
+      select count(*) into a from bk_branch where code = br;
+      if a = 0 then
+        raise_application_error(-20160, 'BK-160: Δεν υπάρχει υποκατάστημα ' || br);
+      end if;
+    else
+      select count(*) into a from bk_account where id = p_account_id;
+      if a = 0 then
+        raise_application_error(-20108, 'BK-108: Δεν υπάρχει λογαριασμός ' || p_account_id);
+      end if;
     end if;
-    if k in ('S', 'C') then
+    if k = 'B' then
+      -- its cash before the period (in: the debit of CASH; out: its credit; in euro), then each day by channel
+      select nvl(sum(l.base_debit - l.base_credit), 0) into prev
+      from bk_line l join bk_entry e on e.id = l.entry_id
+      where l.gl_code = 'CASH' and e.branch_code = br and e.book_date < trunc(p_from);
+      for x in (select e.book_date, e.channel, sum(l.base_debit) cash_in, sum(l.base_credit) cash_out,
+                       count(distinct e.id) n
+                from bk_line l join bk_entry e on e.id = l.entry_id
+                where l.gl_code = 'CASH' and e.branch_code = br and e.book_date between trunc(p_from) and trunc(p_to)
+                group by e.book_date, e.channel
+                order by e.book_date, e.channel) loop
+        out_(x.book_date, case x.channel when 'BR' then 'Γκισέ' else x.channel end,
+             x.n || case when x.n = 1 then ' κίνηση' else ' κινήσεις' end || ' μετρητών',
+             nullif(x.cash_in, 0), nullif(x.cash_out, 0));
+        pipe row (r);
+      end loop;
+    elsif k in ('S', 'C') then
       -- its balance before the period (its lines by their book date), then its lines of the period
       select sg * nvl(sum(l.credit - l.debit), 0) into prev
       from bk_line l join bk_entry e on e.id = l.entry_id
@@ -161,7 +190,7 @@ create or replace package body bk_report as
         pipe row (r);
       end loop;
     else
-      raise_application_error(-20145, 'BK-145: Καρτέλα (S), τόκοι (I), κίνηση κάρτας (C) ή δάνειο (L)');
+      raise_application_error(-20145, 'BK-145: Καρτέλα (S), τόκοι (I), κίνηση κάρτας (C), δάνειο (L) ή ταμείο (B)');
     end if;
     if n = 0 then
       -- nothing in the period: the balance before it, alone
@@ -174,6 +203,11 @@ create or replace package body bk_report as
   function title(p_kind varchar2, p_account_id number) return varchar2 is
     t varchar2(300);
   begin
+    if upper(p_kind) = 'B' then
+      select 'Ταμείο υποκαταστήματος ' || b.code || '  ·  ' || b.name || nvl2(b.city, '  ·  ' || b.city, null) into t
+      from bk_branch b where b.code = lpad(to_char(p_account_id), 4, '0');
+      return t;
+    end if;
     select a.iban || '  ·  ' || a.holder || '  ·  ' || a.product_name || '  ·  ' || a.currency into t
     from bk_account_v a where a.id = p_account_id;
     return case upper(p_kind) when 'I' then 'Τόκοι λογαριασμού ' when 'C' then 'Κίνηση πιστωτικής κάρτας '
@@ -192,6 +226,13 @@ create or replace package body bk_report as
         when 'DATE' then 'Λήξη' when 'DOC' then 'Δόση' when 'DESCR' then 'Ποσό · επιτόκιο · κατάσταση'
         when 'DEBIT' then 'Τόκος' when 'CREDIT' then 'Κεφάλαιο' when 'BALANCE' then 'Υπόλοιπο κεφαλαίου'
         when 'OPEN' then 'Κεφάλαιο στην αρχή' when 'CLOSE' then 'Κεφάλαιο στο τέλος'
+        else label(p_key) end;
+    end if;
+    if upper(p_kind) = 'B' then
+      return case upper(p_key)
+        when 'DATE' then 'Ημέρα' when 'DOC' then 'Κανάλι' when 'DESCR' then 'Κινήσεις'
+        when 'DEBIT' then 'Εισπράξεις' when 'CREDIT' then 'Πληρωμές' when 'BALANCE' then 'Ταμείο'
+        when 'OPEN' then 'Ταμείο στην αρχή' when 'CLOSE' then 'Ταμείο στο τέλος'
         else label(p_key) end;
     end if;
     if upper(p_kind) = 'C' then
@@ -249,7 +290,22 @@ create or replace package body bk_report as
           null;
       end;
     end if;
-    return label('PERIOD') || ': ' || to_char(p_from, 'DD/MM/YYYY') || ' - ' || to_char(p_to, 'DD/MM/YYYY');
+    return label('PERIOD') || ': ' || to_char(p_from, 'DD/MM/YYYY') || ' - ' || to_char(p_to, 'DD/MM/YYYY')
+           || case when upper(p_kind) = 'B' then '  ·  σε ευρώ' end;
+  end;
+
+  function branch(p_kind varchar2, p_account_id number) return varchar2 is
+    t varchar2(100);
+  begin
+    if upper(p_kind) = 'B' then
+      return null;
+    end if;
+    select 'Υποκ. ' || b.code || ' · ' || b.name into t
+    from bk_account a join bk_branch b on b.code = a.branch_code where a.id = p_account_id;
+    return substr(t, 1, 40);
+  exception
+    when no_data_found then
+      return null;
   end;
 end bk_report;
 /

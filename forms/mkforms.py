@@ -204,8 +204,10 @@ FORMS['BK_ACCOUNTS'] = dict(
          ('PRINTST', 'button', 222, 610, 220, 'Εκτύπωση καρτέλας', {}),
          ('PRINTINT', 'button', 448, 610, 220, 'Εκτύπωση τόκων', {}),
          ('B_BRANCH', 'text', 10, 658, 80, 'Υποκ. (λίστα)', {'len': 4, 'lov': 'LOV_BBR'}),
-         ('MOVEBR', 'button', 96, 656, 300, 'Μεταφορά σε υποκατάστημα', {'role': 'MANAGER'})],
-    lovs=[branch_lov('LOV_BBR', 'CTL.B_BRANCH')])
+         ('MOVEBR', 'button', 96, 656, 300, 'Μεταφορά σε υποκατάστημα', {'role': 'MANAGER'}),
+         ('F_BRANCH', 'text', 448, 658, 80, 'Φίλτρο υποκ. (λίστα)', {'len': 4, 'lov': 'LOV_FBR'}),
+         ('FILTERBR', 'button', 534, 656, 220, 'Μόνο αυτού (κενό: όλα)', {})],
+    lovs=[branch_lov('LOV_BBR', 'CTL.B_BRANCH'), branch_lov('LOV_FBR', 'CTL.F_BRANCH')])
 
 # a movement at the counter (the channel BR): the account (a list), what (a list), the other account or IBAN, the
 # amount, its value date; below, the last moves of the account
@@ -410,13 +412,15 @@ FORMS['BK_CCARDS'] = dict(
          ('N_LIMIT', 'text', 392, 552, 100, 'Όριο (€)', {'num': True}),
          ('N_DAY', 'text', 498, 552, 70, 'Ημ. κίνησης', {'num': True}),
          ('NEWCC', 'button', 574, 550, 220, 'Νέα πιστωτική κάρτα', {'role': 'MANAGER'}),
-         ('C_RESULT', 'display', 10, 602, 860, 'Το PIN της νέας κάρτας (μία φορά)', {'len': 300})],
+         ('C_RESULT', 'display', 10, 602, 860, 'Το PIN της νέας κάρτας (μία φορά)', {'len': 300}),
+         ('F_BRANCH', 'text', 10, 652, 80, 'Φίλτρο υποκ. (λίστα)', {'len': 4, 'lov': 'LOV_FBR'}),
+         ('FILTERBR', 'button', 96, 650, 220, 'Μόνο αυτού (κενό: όλα)', {})],
     lovs=[('LOV_PACC', 'Λογαριασμοί', CC_PAY_LOV, [('ID', 0, 'Κωδ.', 'CTL.P_FROM_ID'), ('TEXT', 380, 'Λογαριασμός', 'CTL.P_FROM_TEXT')]),
           ('LOV_CUST', 'Πελάτες', "select id, name || ' ' || afm text from bk_customer where active = 'Y' order by name",
            [('ID', 0, 'Κωδ.', 'CTL.N_CUST_ID'), ('TEXT', 320, 'Πελάτης', 'CTL.N_CUST_TEXT')]),
           ('LOV_CCPROD', 'Προϊόντα καρτών', "select code, name from bk_product where kind = 'CC' and active = 'Y' order by id",
            [('CODE', 70, 'Προϊόν', 'CTL.N_PRODUCT'), ('NAME', 220, 'Όνομα', None)]),
-          currency_lov('LOV_QCUR', 'CTL.Q_CURRENCY')])
+          currency_lov('LOV_QCUR', 'CTL.Q_CURRENCY'), branch_lov('LOV_FBR', 'CTL.F_BRANCH')])
 
 # the loans (BK_LOAN_V): the loan on the screen, its schedule below; a new one (MANAGER: paid to an account of the
 # bank, its customer the primary holder of it; its installment first: "Δόση"), what pays it off today, a prepayment
@@ -473,14 +477,17 @@ FORMS['BK_LOANS'] = dict(
          ('N_DAY', 'text', 594, 684, 60, 'Ημ. δόσης', {'num': True}),
          ('QUOTE', 'button', 660, 682, 100, 'Δόση', {}),
          ('NEWLOAN', 'button', 766, 682, 150, 'Νέο δάνειο', {'role': 'MANAGER'}),
-         ('N_RESULT', 'display', 10, 734, 900, 'Αποτέλεσμα', {'len': 300})],
+         ('N_RESULT', 'display', 10, 734, 900, 'Αποτέλεσμα', {'len': 300}),
+         ('F_BRANCH', 'text', 656, 582, 80, 'Φίλτρο υποκ. (λίστα)', {'len': 4, 'lov': 'LOV_FBR'}),
+         ('FILTERBR', 'button', 742, 580, 200, 'Μόνο αυτού (κενό: όλα)', {})],
     lovs=[('LOV_LPAY', 'Λογαριασμοί', LOAN_PAY_LOV, [('ID', 0, 'Κωδ.', 'CTL.N_PAY_ID'), ('TEXT', 400, 'Λογαριασμός', 'CTL.N_PAY_TEXT')]),
           ('LOV_LNPROD', 'Προϊόντα δανείων', "select code, name from bk_product where kind = 'LN' and active = 'Y' order by id",
            [('CODE', 70, 'Προϊόν', 'CTL.N_PRODUCT'), ('NAME', 260, 'Όνομα', None)]),
-          words_lov('LOV_PMODE', 'Πρόωρη εξόφληση', PREPAY_MODES, 'CTL.P_MODE', 'CTL.P_MODE_TEXT', w=240)])
+          words_lov('LOV_PMODE', 'Πρόωρη εξόφληση', PREPAY_MODES, 'CTL.P_MODE', 'CTL.P_MODE_TEXT', w=240),
+          branch_lov('LOV_FBR', 'CTL.F_BRANCH')])
 
 # the branches (BK_BRANCH_V: its accounts, users, ATMs, its cash), the accounts of the one on the screen below; a
-# branch new or changed, active or not (MANAGER)
+# branch new or changed, active or not (MANAGER); its cash printed (from - to)
 FORMS['BK_BRANCHES'] = dict(
     title='Υποκαταστήματα',
     blocks=[dict(name='BR', table='BK_BRANCH_V', order='code', top=TOP, rows=6, read_only=True,
@@ -507,7 +514,11 @@ FORMS['BK_BRANCHES'] = dict(
          ('S_CITY', 'text', 282, 532, 120, 'Πόλη', {'len': 60}),
          ('S_ADDRESS', 'text', 408, 532, 230, 'Διεύθυνση', {'len': 200}),
          ('SAVEBR', 'button', 644, 530, 220, 'Αποθήκευση υποκαταστήματος', {'role': 'MANAGER'}),
-         ('TOGGLEBR', 'button', 644, 566, 220, 'Ενεργό / ανενεργό', {'role': 'MANAGER'})])
+         ('TOGGLEBR', 'button', 644, 566, 220, 'Ενεργό / ανενεργό', {'role': 'MANAGER'}),
+         # the report of its cash (reports/mkreports.py: BK_BR_CASH), from - to
+         ('P_FROM', 'date', 10, 612, 100, 'Από', {'year_start': True}),
+         ('P_TO', 'date', 116, 612, 100, 'Έως', {}),
+         ('PRINTCASH', 'button', 222, 610, 240, 'Εκτύπωση ταμείου', {})])
 
 # the currencies (BK_CURRENCY_V: the last rate of each) and the rates of the one on the screen below, the newest
 # first; a rate from a day on, a currency new or changed, active or not (MANAGER); an amount converted (anyone)

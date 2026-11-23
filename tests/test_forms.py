@@ -816,3 +816,31 @@ def test_the_branches_in_the_forms(cur):
     cur.execute("delete from bk_user where username in (:a, :b)", a=admin, b=name)
     cur.connection.commit()
     assert cur.execute('select count(*) from bk_check').fetchone()[0] == 0
+
+
+@needs_db
+def test_the_branch_filter_and_the_cash_report(cur):
+    """the list of one branch only (CTL.FILTERBR; empty: all) in the accounts, the cards, the loans; the report of
+    the cash of a branch"""
+    for form, block in (('BK_ACCOUNTS', 'ACC'), ('BK_CCARDS', 'CC'), ('BK_LOANS', 'LN')):
+        compile_ui(cur, form)
+        run(cur, "ui.press('CTL.FILTERBR');", CTL__F_BRANCH='0002')
+        assert "%s:branch_code = '0002';" % block in queries(cur) and '0002' in msgs(cur)
+        assert 'Δεν υπάρχει' in fails(cur, "ui.press('CTL.FILTERBR');", CTL__F_BRANCH='9999')
+        run(cur, "ui.press('CTL.FILTERBR');", CTL__F_BRANCH='')
+        assert 'Όλα' in msgs(cur) and "branch_code" not in queries(cur)
+    compile_ui(cur, 'BK_BRANCHES')
+    old = cur.execute("select name, value from bk_setting where name like 'REPORTS%'").fetchall()
+    try:
+        cur.execute("delete from bk_setting where name like 'REPORTS%'")
+        cur.execute("insert into bk_setting (name, value) values ('REPORTS_URL', 'http://x:9012/reports/rwservlet?bank')")
+        cur.connection.commit()
+        run(cur, "ui.press('CTL.PRINTCASH');", BR__CODE='0002', CTL__P_FROM='01/01/2026', CTL__P_TO='31/01/2026')
+        assert prop(cur, 'SHOW_DOCUMENT') == ('http://x:9012/reports/rwservlet?bank&report=BK_BR_CASH.rdf&destype=cache'
+                                              '&desformat=PDF&P_KIND=B&P_ACCOUNT=2&P_FROM=01/01/2026&P_TO=31/01/2026 _blank')
+        assert 'Πρώτα' in fails(cur, "ui.press('CTL.PRINTCASH');", CTL__P_FROM='01/01/2026', CTL__P_TO='31/01/2026')
+    finally:
+        cur.execute("delete from bk_setting where name like 'REPORTS%'")
+        for n, v in old:
+            cur.execute('insert into bk_setting (name, value) values (:n, :v)', n=n, v=v)
+        cur.connection.commit()

@@ -407,3 +407,6 @@ def test_the_branches(base):
     assert u['branch_code'] == '9201'
     assert ok(base, '/api/users/%d' % u['id'], {'branch': '0003'}, 'tst-admin')['branch_code'] == '0003'
     ok(base, '/api/users/%d' % u['id'], {'active': 'N'}, 'tst-admin')
+    # the loans of a branch
+    assert all(x['branch_code'] == '0002' for x in ok(base, '/api/loans?status=&branch=0002'))
+    assert ok(base, '/api/loans?status=&branch=9999') == []

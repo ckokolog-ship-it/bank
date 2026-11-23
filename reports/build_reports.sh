@@ -14,7 +14,7 @@
 set -u
 cd "$(dirname "$0")" || exit 1
 HERE=$(pwd)
-REPORTS=${*:-BK_STATEMENT BK_INTEREST BK_CC_STATEMENT BK_LN_SCHEDULE}
+REPORTS=${*:-BK_STATEMENT BK_INTEREST BK_CC_STATEMENT BK_LN_SCHEDULE BK_BR_CASH}
 USERID=${USERID:-/@BK_DB}
 D=${DOMAIN_HOME:-/u01/app/oracle/config/domains/forms_domain}
 MW=${MW_HOME:-/u01/app/oracle/middleware}

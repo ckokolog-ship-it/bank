@@ -8,11 +8,15 @@ build_reports.sh, on forms1):
                 what is owed (charges less payments); under the title its minimum and its due date
   BK_LN_SCHEDULE  the schedule of a loan: its installments (their interest, their principal, the principal left,
                 each paid or not, late, its fee); under the title its principal, months, rate and day
+  BK_BR_CASH    the cash of a branch: each day of the period by channel (the counter, its ATMs), in and out in
+                euro, the running cash (P_ACCOUNT: the code of the branch as a number, 2 for 0002)
   BK_INTEREST   its interest: the stretches of the period (balance x rate x days / days of the year) as
                 credit, the capitalizations (gross; the tax and the net in the words) as debit; the balance:
                 the interest accrued and not capitalized yet (6 decimals, as BK_ACCRUAL)
 
-The parameters: P_KIND (S, I, C, L), P_ACCOUNT (the id of the account), P_FROM and P_TO (DD/MM/YYYY). The rows:
+On the right of the line under the title, the branch of the account (bk_report.branch).
+
+The parameters: P_KIND (S, I, C, L, B), P_ACCOUNT (the id of the account), P_FROM and P_TO (DD/MM/YYYY). The rows:
 bk_report.report_rows of the database (db/BK_REPORT.sql). On every page, on top "from the carry-over" (από
 μεταφορά): the totals before its first row (the first PRIOR_*, a summary reset at the page); at the bottom "to
 the carry-over" (σε μεταφορά): with its last row (the last CUM_* and BALANCE). After the last row: the totals
@@ -74,6 +78,7 @@ REPORTS = {
     'BK_STATEMENT': dict(kind='S', mask=MONEY),
     'BK_CC_STATEMENT': dict(kind='C', mask=MONEY),
     'BK_LN_SCHEDULE': dict(kind='L', mask=MONEY),
+    'BK_BR_CASH': dict(kind='B', mask=MONEY),
     # the interest of a stretch and the accrued ones with 6 decimals (as BK_ACCRUAL); a capitalization 2
     'BK_INTEREST': dict(kind='I', mask=MONEY6, masks={'DEBIT': MONEY}),
 }
@@ -133,6 +138,8 @@ def build(name, r):
                                                 width=300)))
     out.append('    <formula %s/>' % attrs(dict(name='CF_PERIOD', source='cf_periodformula', datatype='character',
                                                 width=100)))
+    out.append('    <formula %s/>' % attrs(dict(name='CF_BRANCH', source='cf_branchformula', datatype='character',
+                                                width=100)))
     for lb in LABELS:
         out.append('    <formula %s/>' % attrs(dict(name=formula_name(lb), source=formula_name(lb).lower() + 'formula',
                                                     datatype='character', width=100)))
@@ -174,6 +181,7 @@ def build(name, r):
     # the heading: the title, the period, the page; the headings of the columns; from the carry-over
     out.append(field('F_TITLE', 'CF_TITLE', LEFT, 0.30, 5.6, h=0.24, bold=True, size=12))
     out.append(field('F_PERIOD', 'CF_PERIOD', LEFT, 0.58, 5.0, h=0.2, size=9))
+    out.append(field('F_BRANCH', 'CF_BRANCH', LEFT + 5.1, 0.58, 2.14, h=0.2, align='end', size=9))
     out.append(field('F_L_PAGE', formula_name('PAGE'), LEFT + 5.6, 0.30, 0.9, h=0.2, align='end', size=9))
     out.append(field('F_PAGE', 'PageNumber', LEFT + 6.55, 0.30, 0.6, h=0.2, size=9))
     for c, lb in (('LDATE', 'DATE'), ('DOC_TEXT', 'DOC'), ('DESCR', 'DESCR'), ('DEBIT', 'DEBIT'),
@@ -201,6 +209,7 @@ def build(name, r):
     fn('cf_titleformula', 'return bk_report.title(:P_KIND, :P_ACCOUNT);')
     fn('cf_periodformula', "return bk_report.period(:P_KIND, :P_ACCOUNT, to_date(:P_FROM, 'DD/MM/YYYY'), "
                            "to_date(:P_TO, 'DD/MM/YYYY'));")
+    fn('cf_branchformula', 'return bk_report.branch(:P_KIND, :P_ACCOUNT);')
     for lb in LABELS:
         fn(formula_name(lb).lower() + 'formula', "return bk_report.label('%s', :P_KIND);" % lb)
     out += ['  </programUnits>',
