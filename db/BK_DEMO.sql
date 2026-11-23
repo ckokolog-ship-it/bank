@@ -82,6 +82,20 @@ declare
     return s;
   end;
 
+  -- the branch of a customer (its accounts, cards, loans there): of the three, by its number
+  function brof(p_i number) return varchar2 is
+  begin
+    return case mod(p_i, 3) when 1 then '0001' when 2 then '0002' else '0003' end;
+  end;
+
+  -- what is done at a counter for an account: in its branch
+  procedure at_branch(p_acc number) is
+    b varchar2(4);
+  begin
+    select branch_code into b from bk_account where id = p_acc;
+    bk_core.set_branch_context(b);
+  end;
+
   function available(p_acc number) return number is
     v number;
   begin
@@ -129,6 +143,7 @@ begin
   -- some a business one or a savings plus; 8 joint (a second holder)
   k := 0;
   for i in 1 .. 40 loop
+    bk_core.set_branch_context(brof(i));
     k := k + 1;
     acc(k) := bk_core.open_account('CUR', cust(i), case when mod(i, 3) = 0 then 1000 * trunc(dbms_random.value(1, 4)) else 0 end);
     curacc(i) := acc(k);
@@ -155,6 +170,7 @@ begin
   end loop;
   -- 8 current accounts in another currency (USD, GBP)
   for j in 1 .. 8 loop
+    bk_core.set_branch_context(brof(j * 5 - 3));
     k := k + 1;
     acc(k) := bk_core.open_account('CUR', cust(j * 5 - 3), 0, null, case when mod(j, 2) = 0 then 'GBP' else 'USD' end);
     salary(k) := 0; rent(k) := 0;
@@ -169,6 +185,7 @@ begin
 
   -- the credit cards: every third customer, Gold every 4th of them; their statement on a day of their own
   for j in 1 .. 12 loop
+    bk_core.set_branch_context(brof(j * 3));
     cca(j) := bk_core.cc_open(case when mod(j, 4) = 0 then 'GOLD' else 'VISA' end, cust(j * 3),
                               case when mod(j, 4) = 0 then 1000 * trunc(dbms_random.value(5, 11))
                                    else 500 * trunc(dbms_random.value(2, 9)) end,
@@ -179,6 +196,7 @@ begin
 
   -- the loans: of every 4th customer from the 5th, home (3 of them) or consumer; the money paid at once (a house, a car)
   for j in 1 .. 8 loop
+    bk_core.set_branch_context(brof(j * 4 + 1));
     if mod(j, 3) = 1 then
       lna(j) := bk_core.ln_open('HOME', cust(j * 4 + 1), 1000 * trunc(dbms_random.value(60, 121)), 300, curacc(j * 4 + 1),
                                 1 + mod(j * 7, 28));
@@ -209,6 +227,7 @@ begin
 
   -- the first money: every account something in, the savings more
   for j in 1 .. acc.count loop
+    at_branch(acc(j));
     select case p.kind when 'SAV' then 1 else 0 end into n
     from bk_account x join bk_product p on p.id = x.product_id where x.id = acc(j);
     e := bk_core.deposit(acc(j), case when n = 1 then money(2000, 35000) else money(100, 3000) end, 'Αρχική κατάθεση');
@@ -262,6 +281,7 @@ begin
       end loop;
     end if;
     for j in 1 .. acc.count loop
+      at_branch(acc(j));
       -- the salary, on a day of its own early in the month; the rent a few days later
       if salary(j) > 0 and to_number(to_char(d, 'DD')) = 1 + mod(j, 4) then
         e := bk_core.transfer_in(acc(j), salary(j), 'GR1601101250000000012300695', 'Μισθοδοσία ' || to_char(d, 'MM/YYYY'),
@@ -373,6 +393,7 @@ begin
     bk_core.close_day(d);
     d := d + 1;
   end loop;
+  bk_core.set_branch_context(null);
   commit;
   select count(*) into n from bk_entry;
   dbms_output.put_line('== demo: ' || cust.count || ' customers, ' || acc.count || ' accounts, ' || cca.count

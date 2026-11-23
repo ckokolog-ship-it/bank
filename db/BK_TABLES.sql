@@ -27,6 +27,23 @@ insert into bk_currency (code, name, decimals, spread_pct)
 select 'EUR', 'Ευρώ', 2, 0 from dual where not exists (select 1 from bk_currency where code = 'EUR');
 commit;
 
+-- the branches of the bank: CODE, its 4 digits in the IBAN of its accounts (GR, check, bank, branch, account);
+-- every account of one of them (cards and loans too: accounts), every user (its counter), every ATM; every entry
+-- where it was made (BK_ENTRY.BRANCH_CODE: the branch of the user at a counter, of the ATM; none: e-banking, the
+-- bank itself)
+create table if not exists bk_branch (
+  code        varchar2(4)   constraint bk_branch_pk primary key
+                            constraint bk_branch_code_ck check (regexp_like(code, '^[0-9]{4}$')),
+  name        varchar2(60 char) not null,
+  city        varchar2(60 char),
+  address     varchar2(200 char),
+  active      varchar2(1)   default 'Y' not null constraint bk_branch_active_ck check (active in ('Y', 'N'))
+);
+insert into bk_branch (code, name, city, address)
+select '0001', 'Κεντρικό Πάτρας', 'Πάτρα', 'Μαιζώνος 120, Πάτρα' from dual
+where not exists (select 1 from bk_branch where code = '0001');
+commit;
+
 -- the rates of the currencies: MID, how many of it one of the base currency buys (as the ECB: 1 EUR = 1,08 USD),
 -- from its day on (the latest day before or on a day is the rate of that day); none of the base currency (1).
 -- A heap table: a block of the forms reads its rows by their ROWID (the first one of PR 17 was organized by its
@@ -529,6 +546,11 @@ declare
 begin
   add_('BK_ACCOUNT', 'CURRENCY', q'[currency varchar2(3) default 'EUR' not null constraint bk_account_currency_fk references bk_currency]');
   add_('BK_PRODUCT', 'CURRENCIES', q'[currencies varchar2(200) default 'EUR' not null]');
+  -- the branches (all of it of the first one, 0001: the IBAN of the accounts of before as they are)
+  add_('BK_ACCOUNT', 'BRANCH_CODE', q'[branch_code varchar2(4) default '0001' not null constraint bk_account_branch_fk references bk_branch]');
+  add_('BK_USER', 'BRANCH_CODE', q'[branch_code varchar2(4) default '0001' not null constraint bk_user_branch_fk references bk_branch]');
+  add_('BK_ATM', 'BRANCH_CODE', q'[branch_code varchar2(4) default '0001' not null constraint bk_atm_branch_fk references bk_branch]');
+  add_('BK_ENTRY', 'BRANCH_CODE', q'[branch_code varchar2(4) constraint bk_entry_branch_fk references bk_branch]');
   add_('BK_LINE', 'CURRENCY', q'[currency varchar2(3) default 'EUR' not null constraint bk_line_currency_fk references bk_currency]');
   if missing('BK_LINE', 'BASE_DEBIT') then
     execute immediate 'alter table bk_line add (base_debit number(18,2), base_credit number(18,2))';
@@ -545,6 +567,9 @@ begin
   end if;
 end;
 /
+
+create index if not exists bk_account_branch_ix on bk_account (branch_code);
+create index if not exists bk_entry_branch_ix on bk_entry (branch_code, book_date);
 
 -- the statement of an account: its lines in their order, the balance after each (the running balance)
 create or replace view bk_statement as
@@ -652,7 +677,7 @@ end;
 -- the accounts: their product, their primary holder
 create or replace view bk_account_v as
 select a.id, a.iban, a.name, p.code product, p.name product_name, a.status, a.balance, a.od_limit,
-       round(a.accrued, 2) accrued, a.accrued_to, a.opened_on, a.closed_on, a.currency,
+       round(a.accrued, 2) accrued, a.accrued_to, a.opened_on, a.closed_on, a.currency, a.branch_code,
        (select c.name from bk_holder h, bk_customer c where h.account_id = a.id and h.role = 'P' and c.id = h.customer_id) holder
 from bk_account a, bk_product p
 where p.id = a.product_id;
@@ -660,14 +685,14 @@ where p.id = a.product_id;
 -- the accounts of each customer, as primary holder (P) or joint (J)
 create or replace view bk_customer_account_v as
 select h.customer_id, h.account_id, h.role, a.iban, p.code product, p.name product_name, a.status, a.balance, a.od_limit,
-       a.currency
+       a.currency, a.branch_code
 from bk_holder h, bk_account a, bk_product p
 where a.id = h.account_id and p.id = a.product_id;
 
 -- the lines of the accounts with their entry (BK_STATEMENT without its running balance: the form counts it)
 create or replace view bk_statement_line as
 select l.id line_id, l.account_id, l.entry_id, e.kind, e.channel, e.book_date, e.value_date, e.descr, e.reversal_of,
-       l.op, l.debit, l.credit, l.currency, e.orig_amount, e.orig_currency, e.fx_rate
+       l.op, l.debit, l.credit, l.currency, e.orig_amount, e.orig_currency, e.fx_rate, e.branch_code
 from bk_line l, bk_entry e
 where e.id = l.entry_id and l.account_id is not null;
 
@@ -684,6 +709,7 @@ where p.id (+) = r.product_id and a.id (+) = r.account_id;
 create or replace view bk_ccard_v as
 select k.account_id id, k.account_id, a.iban, p.code product, p.name product_name, a.status, k.credit_limit, a.balance, k.held,
        k.credit_limit + a.balance - k.held available, greatest(-a.balance, 0) owed, k.stmt_day, k.last_stmt, a.currency,
+       a.branch_code,
        (select c.name from bk_holder h, bk_customer c where h.account_id = a.id and h.role = 'P' and c.id = h.customer_id) holder
 from bk_ccard k, bk_account a, bk_product p
 where a.id = k.account_id and p.id = a.product_id;
@@ -700,7 +726,7 @@ from bk_currency c;
 create or replace view bk_loan_v as
 select l.account_id id, l.account_id, a.iban, p.code product, p.name product_name, a.currency, a.status acc_status,
        l.status, l.principal, l.months, l.start_date, l.pay_day, l.rate, x.rate_type, -a.balance owed,
-       l.pay_account_id, b.iban pay_iban,
+       l.pay_account_id, b.iban pay_iban, a.branch_code,
        (select s.balance from bk_ln_schedule s where s.account_id = l.account_id and s.status <> 'D'
         order by s.n desc fetch first 1 rows only) principal_after,
        (select min(s.due_date) from bk_ln_schedule s where s.account_id = l.account_id and s.status = 'D') next_due,
@@ -708,6 +734,22 @@ select l.account_id id, l.account_id, a.iban, p.code product, p.name product_nam
        (select c.name from bk_holder h, bk_customer c where h.account_id = a.id and h.role = 'P' and c.id = h.customer_id) holder
 from bk_loan l, bk_account a, bk_product p, bk_ln_product x, bk_account b
 where a.id = l.account_id and p.id = a.product_id and x.product_id = p.id and b.id = l.pay_account_id;
+
+-- the branches: their accounts (open), users, ATMs; the cash of each (in the base currency: what came in at its
+-- counters and its ATMs less what went out, today and in all)
+create or replace view bk_branch_v as
+select b.code, b.name, b.city, b.address, b.active,
+       (select count(*) from bk_account a where a.branch_code = b.code and a.status <> 'C') accounts,
+       (select count(*) from bk_user u where u.branch_code = b.code and u.active = 'Y') users,
+       (select count(*) from bk_atm m where m.branch_code = b.code) atms
+from bk_branch b;
+
+create or replace view bk_branch_cash as
+select e.branch_code, e.channel, sum(l.base_debit - l.base_credit) cash, count(distinct e.id) entries,
+       sum(case when e.book_date = (select nvl(max(day) + 1, trunc(sysdate)) from bk_day) then l.base_debit - l.base_credit end) cash_today
+from bk_line l join bk_entry e on e.id = l.entry_id
+where l.gl_code = 'CASH' and e.branch_code is not null
+group by e.branch_code, e.channel;
 
 -- the statements of the cards, with their days as text too (DD/MM/YYYY: the parameters of the report)
 create or replace view bk_cc_statement_v as
