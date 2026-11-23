@@ -38,7 +38,7 @@ import java.util.Map;
  *   POST /api/branches {code, name, city, address, active}   a branch new or changed (M)
  *   POST /api/accounts/{id}/branch {branch}      an account to another branch: its IBAN as it was (M)
  *   POST /api/atms/{code}/branch {branch}        an ATM to a branch (M)
- *   GET  /api/loans?q=&status=                   the loans (A active, C paid off)
+ *   GET  /api/loans?q=&status=&branch=          the loans (A active, C paid off; of a branch)
  *   GET  /api/loans/quote?product=&amount=&months=   the installment of a loan before it is opened, the rate now
  *   GET  /api/loans/{id}                         one: its schedule, what pays it off today
  *   POST /api/loans {product, pay_account, amount, months, pay_day}   a new one, paid to that account (its IBAN or
@@ -467,19 +467,21 @@ final class Api {
 
     // ---------------------------------------------------------------------------------------------
     private static final String LOAN_COLS = "select id, iban, product, product_name, currency, status, principal, months, "
-            + "start_date, pay_day, rate, rate_type, owed, pay_account_id, pay_iban, principal_after, next_due, late, holder "
-            + "from bk_loan_v";
+            + "start_date, pay_day, rate, rate_type, owed, pay_account_id, pay_iban, principal_after, next_due, late, holder, "
+            + "branch_code from bk_loan_v";
 
     private Object loans(Connection c, Auth.User u, boolean get, String[] p, Map<String, String> q, Map<String, Object> in)
             throws SQLException {
         if (get && p.length == 1) {
             String s = q.getOrDefault("q", "").trim();
             String st = q.getOrDefault("status", "").trim().toUpperCase();
+            String br = q.getOrDefault("branch", "").trim();
             Object v = s.isEmpty() ? null : s;
             Object vs = st.isEmpty() ? null : st;
+            Object vb = br.isEmpty() ? null : br;
             return Db.rows(c, LOAN_COLS + " where (? is null or iban like '%' || replace(upper(?), ' ') || '%' or "
-                    + ai("holder") + " like '%' || " + ai("?") + " || '%') and (? is null or status = ?) order by id "
-                    + "fetch first 500 rows only", v, v, v, vs, vs);
+                    + ai("holder") + " like '%' || " + ai("?") + " || '%') and (? is null or status = ?) "
+                    + "and (? is null or branch_code = ?) order by id fetch first 500 rows only", v, v, v, vs, vs, vb, vb);
         }
         if (get && is(p, "loans", "quote")) {
             String prod = q.get("product");

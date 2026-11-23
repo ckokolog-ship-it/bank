@@ -819,25 +819,27 @@ async function products() {
 const LN_STATUS = { D: 'Θα έρθει', O: 'Οφείλεται', L: 'Σε καθυστέρηση', P: 'Πληρώθηκε' };
 
 async function loans() {
-  const [prods] = await Promise.all([api('products')]);
+  const [prods, brs] = await Promise.all([api('products'), branchList()]);
   const box = h('div');
   const q = h('input', { placeholder: 'IBAN ή όνομα δικαιούχου', type: 'search' });
   const st = h('select', null, h('option', { value: 'A' }, 'Ενεργά'), h('option', { value: 'C' }, 'Εξοφλημένα'),
     h('option', { value: '' }, 'Όλα'));
+  const bs = sel('branch', branchOpts(brs, 'Όλα τα υποκαταστήματα'));
   const list = h('div');
   async function load() {
-    const rows = await api('loans?status=' + st.value + '&q=' + encodeURIComponent(q.value.trim()));
-    list.replaceChildren(table(['Λογαριασμός δανείου', 'Προϊόν', 'Δικαιούχος', '#Κεφάλαιο', '#Μήνες', '#Επιτόκιο %', '#Οφειλή',
+    const rows = await api('loans?status=' + st.value + '&branch=' + bs.value + '&q=' + encodeURIComponent(q.value.trim()));
+    list.replaceChildren(table(['Λογαριασμός δανείου', 'Προϊόν', 'Δικαιούχος', 'Υποκ.', '#Κεφάλαιο', '#Μήνες', '#Επιτόκιο %', '#Οφειλή',
       'Επόμενη δόση', 'Καθυστέρηση'],
     rows.map((l) => h('tr', { class: 'click', onclick: () => { location.hash = '#/loan/' + l.id; } },
-      td(iban(l.iban), 'mono'), td(l.product), td(l.holder), tdn(amt(l.principal, l.currency)), tdn(l.months),
+      td(iban(l.iban), 'mono'), td(l.product), td(l.holder), td(l.branch_code), tdn(amt(l.principal, l.currency)), tdn(l.months),
       tdn(num(l.rate, 4)), tdn(amt(l.owed, l.currency)), td(date(l.next_due)),
       td(l.late ? h('span', { class: 'badge no' }, l.late + ' δόσεις') : (l.status === 'C' ? 'Εξοφλήθηκε' : ''))))));
   }
   let timer;
   q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); });
   st.addEventListener('change', load);
-  box.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', null, 'Δάνεια'), q, st), list));
+  bs.addEventListener('change', load);
+  box.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', null, 'Δάνεια'), q, st, bs), list));
   // a new one: its installment first
   const lprods = prods.filter((p) => p.kind === 'LN' && p.active === 'Y');
   const quote = h('p', { class: 'muted' });

@@ -62,6 +62,7 @@ order by seq]]>
     <summary name="CS_CLOSE" source="BALANCE" function="last" width="22" precision="12" scale="6" reset="report" compute="report"/>
     <formula name="CF_TITLE" source="cf_titleformula" datatype="character" width="300"/>
     <formula name="CF_PERIOD" source="cf_periodformula" datatype="character" width="100"/>
+    <formula name="CF_BRANCH" source="cf_branchformula" datatype="character" width="100"/>
     <formula name="CF_L_DATE" source="cf_l_dateformula" datatype="character" width="100"/>
     <formula name="CF_L_DOC" source="cf_l_docformula" datatype="character" width="100"/>
     <formula name="CF_L_DESCR" source="cf_l_descrformula" datatype="character" width="100"/>
@@ -152,6 +153,10 @@ order by seq]]>
           <font face="Helvetica" size="9"/>
           <geometryInfo x="0.40000" y="0.58000" width="5.00000" height="0.20000"/>
         </field>
+        <field name="F_BRANCH" source="CF_BRANCH" minWidowLines="1" spacing="0" alignment="end">
+          <font face="Helvetica" size="9"/>
+          <geometryInfo x="5.50000" y="0.58000" width="2.14000" height="0.20000"/>
+        </field>
         <field name="F_L_PAGE" source="CF_L_PAGE" minWidowLines="1" spacing="0" alignment="end">
           <font face="Helvetica" size="9"/>
           <geometryInfo x="6.00000" y="0.30000" width="0.90000" height="0.20000"/>
@@ -233,6 +238,14 @@ end;]]>
       <![CDATA[function cf_periodformula return Char is
 begin
   return bk_report.period(:P_KIND, :P_ACCOUNT, to_date(:P_FROM, 'DD/MM/YYYY'), to_date(:P_TO, 'DD/MM/YYYY'));
+end;]]>
+      </textSource>
+    </function>
+    <function name="cf_branchformula" returnType="character">
+      <textSource>
+      <![CDATA[function cf_branchformula return Char is
+begin
+  return bk_report.branch(:P_KIND, :P_ACCOUNT);
 end;]]>
       </textSource>
     </function>
