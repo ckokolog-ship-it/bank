@@ -50,10 +50,12 @@ cd ~/bank/forms && ./build_forms.sh /@BK_DB BK_ACCOUNTS    # τα νέα κου�
   - τα ελληνικά έβγαιναν μαθηματικά σύμβολα στο PDF.
 
   Αν το ξαναδείς, τα reports είναι χτισμένα από παλιό XML: `./build_reports.sh`.
-- **Τι κάνει το `pdf_fonts.sh`:**
-  - αντιστοιχίζει τα `Helvetica`, `Arial`, `Courier` και `Courier New` στο DejaVu, που έχει ελληνικά (και τα έντονα στο DejaVu Bold)·
-  - βάζει τις γραμματοσειρές στο `/u01/app/oracle/fonts`·
-  - ελέγχει το περιβάλλον του `WLS_REPORTS` (`REPORTS_FONT_DIRECTORY`, `TK_FONTALIAS`, `NLS_LANG`) στο `setUserOverrides.sh`·
+- **Τι κάνει το `pdf_fonts.sh`** (όπως το `reports_server.ps1` του PROPO στα Windows):
+  - αντιστοιχίζει τα `Helvetica`, `Arial`, `Courier` και `Courier New` στο DejaVu, που έχει ελληνικά (και τα έντονα στο DejaVu Bold), στο `[ PDF:Subset ]` του `uifont.ali`·
+  - βάζει σε σχόλιο ένα alias αυτών των γραμματοσειρών στο `[ Global ]`, που αλλιώς κάνει τον engine να αγνοεί το `[ PDF:Subset ]`·
+  - **αντιγράφει το `uifont.ali` στο Oracle_Home** (`middleware/guicommon/tk/admin` και `middleware/tools/common`). Εκεί το διαβάζει ο engine του `WLS_REPORTS`, και όχι το αρχείο του domain, ακόμα και με `TK_FONTALIAS`. Αυτό βρέθηκε στα Windows, και ισχύει και στο Linux·
+  - βάζει τις γραμματοσειρές στο `/u01/app/oracle/fonts`, και τον φάκελο στο `REPORTS_PATH` του `WLS_REPORTS`, όπου ο engine ψάχνει τα `.ttf`·
+  - ελέγχει το υπόλοιπο περιβάλλον του `WLS_REPORTS` (`REPORTS_FONT_DIRECTORY`, `TK_FONTALIAS`, `NLS_LANG`) στο `setUserOverrides.sh`·
   - κρατά πρώτα αντίγραφο κάθε αρχείου που αλλάζει (`.bk-<ημερομηνία>`), και μια δεύτερη εκτέλεση δεν αλλάζει τίποτα.
 
 ```bash
@@ -65,9 +67,11 @@ sudo -iu oracle ~oracle/bank/reports/pdf_fonts.sh --check     # μετά από 
 ```
 
 Το `--check` δείχνει:
-- το περιβάλλον του `WLS_REPORTS`·
-- τις αντιστοιχίσεις του `uifont.ali`·
-- τις γραμματοσειρές ενός PDF του `BK_STATEMENT`. Σωστό είναι `DejaVuSans` με `emb yes`.
+- το περιβάλλον του `WLS_REPORTS`, με το `REPORTS_PATH`·
+- τα aliases του `[ Global ]` (σωστό: κανένα) και τις αντιστοιχίσεις του `[ PDF:Subset ]`·
+- αν τα αρχεία του Oracle_Home είναι ίδια με αυτό του domain.
+
+Για τον έλεγχο του ίδιου του PDF, άνοιξε ένα report στον browser. Το `pdffonts` σε ένα κατεβασμένο PDF πρέπει να δείχνει `DejaVuSans` με `emb yes`.
 
 Τα reports του mini market ζητούν ακόμα `Arial`. Αν χτιστούν στο forms1, θέλουν την ίδια αλλαγή (`FONT` στο `mkreports.py`).
 
