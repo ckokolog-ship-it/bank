@@ -7,10 +7,15 @@
 #     one of the domain, even with TK_FONTALIAS: the file of the domain is made right, then copied there;
 #   - an alias of these faces in [ Global ] makes it skip [ PDF:Subset ] (the Type 1 fonts of the PDF: no Greek):
 #     such lines put in comments;
-#   - it looks for the .ttf in REPORTS_PATH: the folder of the fonts in it (setUserOverrides.sh of WLS_REPORTS).
+#   - it looks for the .ttf in REPORTS_PATH: the folder of the fonts in it (setUserOverrides.sh of WLS_REPORTS);
+#   - with no TTF of a face it falls back to the Type 1 fonts of the toolkit (their metrics: guicommon/tk/admin/AFM):
+#     those of "EncodingScheme AdobeStandardEncoding" it does not take for text in Greek, and takes Symbol (the only
+#     FontSpecific one) for every field: "GR" as "ΓΡ" in HTML, symbols for Greek in PDF (Oracle bug 2906401). The
+#     AFM of Helvetica, Courier, Times made FontSpecific (the folder kept first, AFM.bk-<date>; --undo-afm: back).
 #
 #   ./pdf_fonts.sh            then, as chris: sudo systemctl restart weblogic-forms
 #   ./pdf_fonts.sh --check    what is there now
+#   ./pdf_fonts.sh --undo-afm the AFM as they were (the copy of the first run), then the restart
 #
 # A second run changes nothing. Every file changed is kept first (.bk-<date>).
 set -u
@@ -18,6 +23,7 @@ D=${DOMAIN_HOME:-/u01/app/oracle/config/domains/forms_domain}
 MW=${MW_HOME:-/u01/app/oracle/middleware}
 U=$D/config/fmwconfig/components/ReportsToolsComponent/reptools1/guicommon/tk/admin/uifont.ali
 HOMES=("$MW/guicommon/tk/admin/uifont.ali" "$MW/tools/common/uifont.ali")
+AFMS=("$MW/guicommon/tk/admin/AFM" "$D/config/fmwconfig/components/ReportsToolsComponent/reptools1/guicommon/tk/admin/AFM")
 O=$D/bin/setUserOverrides.sh
 F=${FONT_DIR:-/u01/app/oracle/fonts}
 R=${REPORTS_DIR:-/u01/app/oracle/reports}
@@ -52,11 +58,26 @@ check() {
   done
   echo "== $F:"
   ls "$F" 2>/dev/null | sed 's/^/   /'
+  for a in "${AFMS[@]}"; do
+    [ -d "$a" ] || continue
+    echo "== $a (Helvetica, Courier, Times: right FontSpecific):"
+    grep -H '^EncodingScheme' "$a"/Helvetica*.afm "$a"/Courier*.afm "$a"/Times*.afm 2>/dev/null |
+      sed 's|.*/||; s/:EncodingScheme / /' | awk '{print "   " $0}'
+  done
   echo "== a PDF: open a report in the browser; with pdffonts (sudo dnf -y install poppler-utils), right: DejaVuSans, emb yes"
 }
 
 if [ "${1:-}" = --check ]; then
   check
+  exit 0
+fi
+if [ "${1:-}" = --undo-afm ]; then
+  for a in "${AFMS[@]}"; do
+    b=$(ls -d "$a".bk-* 2>/dev/null | head -1)
+    [ -n "$b" ] || continue
+    cp -p "$b"/*.afm "$a"/ && echo "== $a: as in $b"
+  done
+  echo "== now, as chris: sudo systemctl restart weblogic-forms"
   exit 0
 fi
 
@@ -116,7 +137,22 @@ for h in "${HOMES[@]}"; do
   fi
 done
 
-# 4. the environment of WLS_REPORTS: the fonts, uifont.ali, NLS_LANG; the folder of the fonts in REPORTS_PATH
+# 4. the AFM of the faces of the reports: FontSpecific, so the engine keeps them for Greek (not Symbol)
+for a in "${AFMS[@]}"; do
+  [ -d "$a" ] || continue
+  files=$(grep -l '^EncodingScheme AdobeStandardEncoding' "$a"/Helvetica*.afm "$a"/Courier*.afm "$a"/Times*.afm 2>/dev/null)
+  if [ -z "$files" ]; then
+    echo "== $a: FontSpecific already"
+    continue
+  fi
+  ls -d "$a".bk-* > /dev/null 2>&1 || cp -rp "$a" "$a.bk-$STAMP"
+  for f in $files; do
+    sed -i 's/^EncodingScheme AdobeStandardEncoding/EncodingScheme FontSpecific/' "$f"
+  done
+  echo "== $a: $(echo "$files" | wc -l) AFM FontSpecific (the folder as it was: $(ls -d "$a".bk-* | head -1))"
+done
+
+# 5. the environment of WLS_REPORTS: the fonts, uifont.ali, NLS_LANG; the folder of the fonts in REPORTS_PATH
 if grep -q 'REPORTS_FONT_DIRECTORY' "$O" 2>/dev/null; then
   echo "== $O: REPORTS_FONT_DIRECTORY there already"
 else

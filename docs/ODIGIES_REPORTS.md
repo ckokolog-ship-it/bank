@@ -55,6 +55,7 @@ cd ~/bank/forms && ./build_forms.sh /@BK_DB BK_ACCOUNTS    # τα νέα κου�
   - βάζει σε σχόλιο ένα alias αυτών των γραμματοσειρών στο `[ Global ]`, που αλλιώς κάνει τον engine να αγνοεί το `[ PDF:Subset ]`·
   - **αντιγράφει το `uifont.ali` στο Oracle_Home** (`middleware/guicommon/tk/admin` και `middleware/tools/common`). Εκεί το διαβάζει ο engine του `WLS_REPORTS`, και όχι το αρχείο του domain, ακόμα και με `TK_FONTALIAS`. Αυτό βρέθηκε στα Windows, και ισχύει και στο Linux·
   - βάζει τις γραμματοσειρές στο `/u01/app/oracle/fonts`, και τον φάκελο στο `REPORTS_PATH` του `WLS_REPORTS`, όπου ο engine ψάχνει τα `.ttf`·
+  - κάνει **`FontSpecific`** το `EncodingScheme` στα αρχεία AFM των Helvetica, Courier και Times (`guicommon/tk/admin/AFM`). Ο server, χωρίς οθόνη, μετρά τις γραμματοσειρές από αυτά. Με το αρχικό `AdobeStandardEncoding` δεν τις δέχεται για ελληνικό κείμενο και βάζει σε **όλα** τα πεδία τη Symbol. Αυτό είναι το Oracle bug 2906401, με σύμπτωμα το «ΓΡ» στη θέση του «GR» στο HTML (`face="symbol"` στο Ctrl+U) και σύμβολα στο PDF. Ο φάκελος κρατιέται πρώτα (`AFM.bk-<ημερομηνία>`), και με `--undo-afm` ξαναγίνεται όπως ήταν·
   - ελέγχει το υπόλοιπο περιβάλλον του `WLS_REPORTS` (`REPORTS_FONT_DIRECTORY`, `TK_FONTALIAS`, `NLS_LANG`) στο `setUserOverrides.sh`·
   - κρατά πρώτα αντίγραφο κάθε αρχείου που αλλάζει (`.bk-<ημερομηνία>`), και μια δεύτερη εκτέλεση δεν αλλάζει τίποτα.
 
