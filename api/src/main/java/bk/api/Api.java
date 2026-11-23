@@ -26,6 +26,11 @@ import java.util.Map;
  *   GET  /api/day                                the business day, the last one closed, BK_CHECK, the entries of the day
  *   POST /api/day/close                          the business day closed: its interest (M)
  *   GET  /api/check                              the rows of BK_CHECK (none: all is right)
+ *   GET  /api/ai/alerts?status=&limit=            the suspicious movements (db/BK_AI.sql: N new, C not a fraud, F a fraud)
+ *   GET  /api/ai/model                           the model: ready (Y/N), in a line, the threshold
+ *   POST /api/ai/scan {day}                      the movements of a day (none: the business day) scored: the new alerts (M)
+ *   POST /api/ai/train                           the model again from the days closed (A)
+ *   POST /api/ai/alerts/{id} {status, note, block}   C not a fraud, F a fraud (block N: its account not blocked) (M)
  *   GET  /api/customers?q=&limit=&offset=        the customers (name, AFM, code, phone)
  *   GET  /api/customers/{id}                     one, with its accounts
  *   POST /api/customers {name, afm, phone, email, address, birth_date, id_card}   a new one
@@ -218,6 +223,10 @@ final class Api {
             case "loans" -> {
                 return loans(c, u, get, p, q, in);
             }
+            case "ai" -> {
+                need(u, "MANAGER");
+                return ai(c, u, get, p, q, in);
+            }
             case "branches" -> {
                 if (get && p.length == 1) {
                     return branches(c);
@@ -301,6 +310,50 @@ final class Api {
         }
         r.put("atms", rows);
         return r;
+    }
+
+    private static final String ALERT_COLS = "select id, status, score, reasons, created_at, reviewed_by, reviewed_at, note, "
+            + "entry_id, account_id, book_date, at_time, kind, channel, descr, amount, currency, amount_eur, direction, "
+            + "orig_amount, orig_currency, iban, holder, account_status, branch_code from bk_ai_alert_v";
+
+    private static Map<String, Object> aiModel(Connection c) throws SQLException {
+        return Db.row(c, "select bk_ai.ready ready, bk_ai.model_info info, bk_ai.threshold threshold, "
+                + "(select count(*) from bk_ai_alert where status = 'N') open from dual");
+    }
+
+    private Object ai(Connection c, Auth.User u, boolean get, String[] p, Map<String, String> q, Map<String, Object> in)
+            throws SQLException {
+        if (get && is(p, "ai", "alerts")) {
+            String st = q.getOrDefault("status", "").trim().toUpperCase();
+            Object vs = st.isEmpty() ? null : st;
+            return Db.rows(c, ALERT_COLS + " where (? is null or status = ?) "
+                    + "order by case status when 'N' then 0 else 1 end, score desc, id fetch first ? rows only", vs, vs, limit(q));
+        }
+        if (get && is(p, "ai", "model")) {
+            return aiModel(c);
+        }
+        if (!get && is(p, "ai", "scan")) {
+            LocalDate d = Http.dateValue(in, "day");
+            long n = Db.fn(c, "bk_ai.scan(p_day => ?)", d);
+            Map<String, Object> r = new LinkedHashMap<>(aiModel(c));
+            r.put("new_alerts", n);
+            return r;
+        }
+        if (!get && is(p, "ai", "train")) {
+            need(u, "ADMIN");
+            long n = Db.fn(c, "bk_ai.train");
+            Map<String, Object> r = new LinkedHashMap<>(aiModel(c));
+            r.put("rows", n);
+            return r;
+        }
+        if (!get && is(p, "ai", "alerts", "*")) {
+            long id = Http.id(p[2]);
+            String block = Http.text(in, "block", false);
+            Db.exec(c, "begin bk_ai.review(?, ?, ?, ?); end;", id, Http.text(in, "status", true).toUpperCase(),
+                    Http.text(in, "note", false), block == null ? "Y" : block.toUpperCase());
+            return Db.row(c, ALERT_COLS + " where id = ?", id);
+        }
+        throw new Http.Fail(404, "not_found", "Δεν υπάρχει αυτή η κλήση");
     }
 
     private static List<Map<String, Object>> branches(Connection c) throws SQLException {

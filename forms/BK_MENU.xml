@@ -26,6 +26,7 @@
       <MenuItem Name="CCARDS" Label="Pistotikes kartes" CommandType="PL/SQL" MenuItemCode="new_form('BK_CCARDS');"/>
       <MenuItem Name="LOANS" Label="Daneia" CommandType="PL/SQL" MenuItemCode="new_form('BK_LOANS');"/>
       <MenuItem Name="DAY" Label="Imera kai kleisimo" CommandType="PL/SQL" MenuItemCode="new_form('BK_DAY');"/>
+      <MenuItem Name="AI" Label="Ypoptes kiniseis" CommandType="PL/SQL" MenuItemCode="new_form('BK_AI');"/>
     </Menu>
     <Menu Name="SETUP_MENU">
       <MenuItem Name="RULES" Label="Kanones kiniseon" CommandType="PL/SQL" MenuItemCode="new_form('BK_RULES');"/>

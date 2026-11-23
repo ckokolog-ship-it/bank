@@ -222,6 +222,9 @@ PACKAGE BODY ui IS
       day_refresh;
     ELSIF c_form = 'BK_LOANS' THEN
       copy('Ίδια δόση, λιγότερες δόσεις', 'CTL.P_MODE_TEXT');
+    ELSIF c_form = 'BK_AI' THEN
+      copy(to_char(bk_core.open_day, 'DD/MM/YYYY'), 'CTL.S_DAY');
+      copy(bk_ai.model_info, 'CTL.X_MODEL');
     ELSIF c_form = 'BK_PRODUCTS' THEN
       copy(to_char(bk_core.open_day, 'DD/MM/YYYY'), 'CTL.N_FROM');
     ELSIF c_form = 'BK_ATMS' THEN
@@ -784,6 +787,41 @@ PACKAGE BODY ui IS
       END IF;
       open_report('BK_BR_CASH', '&P_KIND=B&P_ACCOUNT=' || to_number(k) || '&P_FROM='
                   || to_char(date_in('CTL.P_FROM'), 'DD/MM/YYYY') || '&P_TO=' || to_char(date_in('CTL.P_TO'), 'DD/MM/YYYY'));
+    -- BK_AI: the alert on the screen (not a fraud; a fraud: its account blocked); the scan of a day; the model
+    ELSIF p_item IN ('CTL.OKAY', 'CTL.FRAUD') THEN
+      id_ := num('AL.ID');
+      IF id_ IS NULL THEN
+        fail('Πρώτα μια ειδοποίηση στην οθόνη');
+      END IF;
+      IF p_item = 'CTL.OKAY' THEN
+        st := 'C';
+      ELSE
+        st := 'F';
+      END IF;
+      bk_ai.review(id_, st, name_in('CTL.R_NOTE'), 'Y');
+      forms_ddl('COMMIT');
+      copy('', 'CTL.R_NOTE');
+      requery;
+      copy(bk_ai.model_info, 'CTL.X_MODEL');
+      IF st = 'F' THEN
+        message('Απάτη: ο λογαριασμός ' || name_in('AL.IBAN') || ' δεσμεύτηκε');
+      ELSE
+        message('Η ειδοποίηση έκλεισε: δεν είναι απάτη');
+      END IF;
+    ELSIF p_item = 'CTL.SCAN' THEN
+      d := date_in('CTL.S_DAY');
+      e := bk_ai.scan(d);
+      forms_ddl('COMMIT');
+      requery;
+      copy(bk_ai.model_info, 'CTL.X_MODEL');
+      message('Σάρωση ' || to_char(nvl(d, bk_core.open_day), 'DD/MM/YYYY') || ': ' || e || ' νέες ειδοποιήσεις');
+    ELSIF p_item = 'CTL.TRAIN' THEN
+      IF NOT at_least('ADMIN') THEN
+        fail('Η εκπαίδευση του μοντέλου θέλει ρόλο ADMIN');
+      END IF;
+      e := bk_ai.train;
+      copy(bk_ai.model_info, 'CTL.X_MODEL');
+      message('Το μοντέλο έμαθε από ' || e || ' κινήσεις');
     ELSIF p_item = 'CTL.TOGGLEBR' THEN
       id_ := num('BR.ID');
       IF id_ IS NULL THEN
@@ -973,9 +1011,11 @@ PACKAGE BODY ui IS
     k VARCHAR2(4);                   -- (a currency; the code of a branch)
     t VARCHAR2(60);
   BEGIN
-    IF p_block IN ('ST', 'LAST') THEN
+    IF p_block IN ('ST', 'LAST', 'AST') THEN
       IF p_block = 'ST' THEN
         acc := num('ACC.ID');
+      ELSIF p_block = 'AST' THEN
+        acc := num('AL.ACCOUNT_ID');
       ELSE
         acc := num('CTL.M_ACC_ID');
       END IF;

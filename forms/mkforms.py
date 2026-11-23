@@ -520,6 +520,35 @@ FORMS['BK_BRANCHES'] = dict(
          ('P_TO', 'date', 116, 612, 100, 'Έως', {}),
          ('PRINTCASH', 'button', 222, 610, 240, 'Εκτύπωση ταμείου', {})])
 
+# the suspicious movements (BK_AI_ALERT_V: db/BK_AI.sql, Oracle Machine Learning): the new ones first, the most
+# suspicious first; the last moves of the account of the one on the screen below. Not a fraud, or a fraud (its
+# account blocked), a note; the scan of a day; the model trained again (ADMIN); the model in a line
+FORMS['BK_AI'] = dict(
+    title='Ύποπτες κινήσεις',
+    blocks=[dict(name='AL', table='BK_AI_ALERT_V', order="case status when 'N' then 0 else 1 end, score desc, id",
+                 top=TOP, rows=8, read_only=True,
+                 cols=[C('ID', '', 0, num=True, hidden=True),
+                       C('ACCOUNT_ID', '', 0, num=True, hidden=True),
+                       C('BOOK_DATE', 'Ημέρα', 80, date=True),
+                       C('AT_TIME', 'Ώρα', 44, len=5),
+                       C('IBAN', 'Λογαριασμός', 200, len=27),
+                       C('HOLDER', 'Δικαιούχος', 130, len=100),
+                       C('KIND', 'Είδος', 40, len=3),
+                       C('AMOUNT', 'Ποσό', 86, num=True, mask=MONEY),
+                       C('CURRENCY', 'Νόμ.', 36, len=3),
+                       C('SCORE', 'Βαθμός', 50, num=True, mask='0D000'),
+                       C('STATUS', 'Κατ.', 32, len=1),
+                       C('REASONS', 'Γιατί (το μοντέλο)', 380, len=400)]),
+            dict(name='AST', table='BK_STATEMENT_LINE', order=STATEMENT_ORDER, top=TOP + 8 * ROW_H + 40, rows=8,
+                 read_only=True, where='account_id = :AL.ACCOUNT_ID', cols=statement_cols())],
+    ctl=[('R_NOTE', 'text', 10, 500, 300, 'Σημείωση', {'len': 200}),
+         ('OKAY', 'button', 316, 498, 220, 'Δεν είναι απάτη', {'role': 'MANAGER'}),
+         ('FRAUD', 'button', 542, 498, 300, 'Απάτη: δέσμευση λογαριασμού', {'role': 'MANAGER'}),
+         ('S_DAY', 'date', 10, 548, 100, 'Ημέρα', {}),
+         ('SCAN', 'button', 116, 546, 220, 'Σάρωση της ημέρας', {'role': 'MANAGER'}),
+         ('TRAIN', 'button', 342, 546, 260, 'Εκπαίδευση μοντέλου', {'role': 'ADMIN'}),
+         ('X_MODEL', 'display', 10, 596, 900, 'Το μοντέλο', {'len': 300})])
+
 # the currencies (BK_CURRENCY_V: the last rate of each) and the rates of the one on the screen below, the newest
 # first; a rate from a day on, a currency new or changed, active or not (MANAGER); an amount converted (anyone)
 FORMS['BK_FX'] = dict(
@@ -623,13 +652,14 @@ FORMS['BK_LOGIN'] = dict(
 # the role each form needs (ui.session_ok: TELLER < MANAGER < ADMIN); None: the login itself
 FORM_ROLES = {'BK_LOGIN': None, 'BK_MAIN': 'TELLER', 'BK_CUSTOMERS': 'TELLER', 'BK_ACCOUNTS': 'TELLER',
               'BK_MOVE': 'TELLER', 'BK_DAY': 'TELLER', 'BK_RULES': 'TELLER', 'BK_PRODUCTS': 'TELLER',
-              'BK_CARDS': 'TELLER', 'BK_CCARDS': 'TELLER', 'BK_LOANS': 'TELLER', 'BK_FX': 'TELLER', 'BK_BRANCHES': 'TELLER', 'BK_ATMS': 'TELLER', 'BK_USERS': 'ADMIN'}
+              'BK_CARDS': 'TELLER', 'BK_CCARDS': 'TELLER', 'BK_LOANS': 'TELLER', 'BK_FX': 'TELLER', 'BK_BRANCHES': 'TELLER', 'BK_ATMS': 'TELLER', 'BK_USERS': 'ADMIN',
+              'BK_AI': 'MANAGER'}
 
 # the first menu: a button for each form (NEW_FORM), the business day, the logout, the exit
 MENU_FORMS = [('BK_CUSTOMERS', 'Πελάτες'), ('BK_ACCOUNTS', 'Λογαριασμοί'), ('BK_MOVE', 'Κίνηση'),
               ('BK_CARDS', 'Κάρτες'), ('BK_CCARDS', 'Πιστωτικές κάρτες'), ('BK_LOANS', 'Δάνεια'), ('BK_RULES', 'Κανόνες κινήσεων'), ('BK_PRODUCTS', 'Προϊόντα και επιτόκια'),
               ('BK_FX', 'Νομίσματα και ισοτιμίες'), ('BK_BRANCHES', 'Υποκαταστήματα'),
-              ('BK_ATMS', 'ATM'), ('BK_DAY', 'Ημέρα και κλείσιμο'), ('BK_USERS', 'Χρήστες')]
+              ('BK_ATMS', 'ATM'), ('BK_DAY', 'Ημέρα και κλείσιμο'), ('BK_AI', 'Ύποπτες κινήσεις'), ('BK_USERS', 'Χρήστες')]
 FORMS['BK_MAIN'] = dict(
     title='Bank',
     blocks=[],
@@ -660,7 +690,8 @@ MENU_BAR = [
                          ('CARDS', 'Κάρτες', "new_form('BK_CARDS');"),
                          ('CCARDS', 'Πιστωτικές κάρτες', "new_form('BK_CCARDS');"),
                          ('LOANS', 'Δάνεια', "new_form('BK_LOANS');"),
-                         ('DAY', 'Ημέρα και κλείσιμο', "new_form('BK_DAY');")]),
+                         ('DAY', 'Ημέρα και κλείσιμο', "new_form('BK_DAY');"),
+                         ('AI', 'Ύποπτες κινήσεις', "new_form('BK_AI');")]),
     ('SETUP', 'Ρυθμίσεις', [('RULES', 'Κανόνες κινήσεων', "new_form('BK_RULES');"),
                             ('PRODUCTS', 'Προϊόντα και επιτόκια', "new_form('BK_PRODUCTS');"),
                             ('FX', 'Νομίσματα και ισοτιμίες', "new_form('BK_FX');"),
