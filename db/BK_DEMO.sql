@@ -10,7 +10,9 @@
 -- purchases, a hotel held and released now and then, a statement a month, paid from the current account of the
 -- customer a couple of days before it is due (in full, the minimum, or a part), or not at all: the fee; now and
 -- then a purchase abroad (USD, GBP, CHF, JPY). The rates of the currencies every day (a random walk); 8 accounts in
--- USD or GBP, money changed into them every month. Run by
+-- USD or GBP, money changed into them every month. 8 loans (home: variable on the Euribor of 3 months, which moves
+-- every month; consumer: fixed), paid from the current account of the customer (late when it has not the money:
+-- its fee, its late interest), a prepayment and a payoff. Run by
 -- INSTALL.sql demo; once: a database with entries already is left as it is.
 set serveroutput on
 declare
@@ -43,6 +45,8 @@ declare
   fxa t_num;          -- the accounts in another currency, and the current account in EUR of their customer
   fxf t_num;
   mid number;
+  lna t_num;          -- the loans
+  eur3 number := 2.5;
   n number;
   e number;
   d date;
@@ -173,6 +177,20 @@ begin
     ccpay(j) := mod(j, 3);
   end loop;
 
+  -- the loans: of every 4th customer from the 5th, home (3 of them) or consumer; the money paid at once (a house, a car)
+  for j in 1 .. 8 loop
+    if mod(j, 3) = 1 then
+      lna(j) := bk_core.ln_open('HOME', cust(j * 4 + 1), 1000 * trunc(dbms_random.value(60, 121)), 300, curacc(j * 4 + 1),
+                                1 + mod(j * 7, 28));
+    else
+      lna(j) := bk_core.ln_open('CONS', cust(j * 4 + 1), 500 * trunc(dbms_random.value(8, 41)), 12 * trunc(dbms_random.value(2, 6)),
+                                curacc(j * 4 + 1), 1 + mod(j * 7, 28));
+    end if;
+    select l.principal into amt from bk_loan l where l.account_id = lna(j);
+    e := bk_core.transfer_out(curacc(j * 4 + 1), amt, 'GR9608100010000001234567890',
+                              case when mod(j, 3) = 1 then 'Αγορά κατοικίας' else 'Αγορά αυτοκινήτου' end, p_channel => 'WEB');
+  end loop;
+
   -- the rules of the movements: of the bank, of the products, of a few accounts
   n := bk_core.set_rule(null, null, 'DEP', 'WEB', p_allowed => 'N');
   n := bk_core.set_rule(null, null, 'WDR', 'WEB', p_allowed => 'N');
@@ -206,6 +224,23 @@ begin
       bk_core.set_fx_rate(fx(c), d, round(mid * exp(dbms_random.normal * case when fx(c) = 'DKK' then 0.0003 else 0.003 end),
                                           case when fx(c) = 'JPY' then 2 else 4 end));
     end loop;
+    -- the Euribor of 3 months on the 1st of each month: a little up or down
+    if to_number(to_char(d, 'DD')) = 1 then
+      eur3 := greatest(round(eur3 + dbms_random.normal * 0.08, 3), 0);
+      bk_core.set_ln_index('EURIBOR3M', d, eur3);
+    end if;
+    -- a prepayment of a consumer loan in the middle of the year; another one paid off after 9 months
+    if d = first_day + 180 or d = first_day + 270 then
+      a := lna(case when d = first_day + 180 then 2 else 3 end);
+      begin
+        select pay_account_id into b from bk_loan where account_id = a;
+        amt := case when d = first_day + 180 then 1500 else bk_core.ln_payoff(a) end;
+        e := bk_core.deposit(b, amt + 50, case when d = first_day + 180 then 'Κατάθεση για πρόωρη εξόφληση' else 'Κατάθεση για εξόφληση' end);
+        e := bk_core.ln_prepay(a, amt, 'T');
+      exception when others then
+        if sqlcode not in (-20158, -20119) then raise; end if;
+      end;
+    end if;
     -- money changed into the accounts in another currency, on the 10th
     if to_number(to_char(d, 'DD')) = 10 then
       for j in 1 .. fxa.count loop
@@ -341,7 +376,8 @@ begin
   commit;
   select count(*) into n from bk_entry;
   dbms_output.put_line('== demo: ' || cust.count || ' customers, ' || acc.count || ' accounts, ' || cca.count
-                       || ' credit cards, ' || n || ' entries, ' || (last_day_ - first_day + 1) || ' days closed');
+                       || ' credit cards, ' || lna.count || ' loans, ' || n || ' entries, ' || (last_day_ - first_day + 1)
+                       || ' days closed');
 end;
 /
 set serveroutput off
