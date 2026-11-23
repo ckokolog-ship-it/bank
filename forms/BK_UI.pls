@@ -1,5 +1,5 @@
 -- BK_UI.pls -- the package UI of the forms of the bank (BK_LOGIN, BK_MAIN, BK_CUSTOMERS, BK_ACCOUNTS, BK_MOVE,
--- BK_DAY, BK_RULES, BK_PRODUCTS, BK_CARDS, BK_CCARDS, BK_FX, BK_ATMS, BK_USERS): mkforms.py puts it in each form. The triggers only call it:
+-- BK_DAY, BK_RULES, BK_PRODUCTS, BK_CARDS, BK_CCARDS, BK_LOANS, BK_FX, BK_ATMS, BK_USERS): mkforms.py puts it in each form. The triggers only call it:
 --   WHEN-NEW-FORM-INSTANCE   ui.init
 --   WHEN-NEW-RECORD-INSTANCE ui.master(:SYSTEM.TRIGGER_BLOCK)   (a master: its detail again)
 --   WHEN-BUTTON-PRESSED      ui.press(:SYSTEM.TRIGGER_ITEM)   (the toolbar: ui.tool)
@@ -210,6 +210,8 @@ PACKAGE BODY ui IS
       END IF;
     ELSIF c_form = 'BK_DAY' THEN
       day_refresh;
+    ELSIF c_form = 'BK_LOANS' THEN
+      copy('Ίδια δόση, λιγότερες δόσεις', 'CTL.P_MODE_TEXT');
     ELSIF c_form = 'BK_PRODUCTS' THEN
       copy(to_char(bk_core.open_day, 'DD/MM/YYYY'), 'CTL.N_FROM');
     ELSIF c_form = 'BK_ATMS' THEN
@@ -631,6 +633,57 @@ PACKAGE BODY ui IS
       SELECT pan INTO tok FROM bk_card WHERE id = id_;
       copy(t || '   (' || tok || ')', 'CTL.C_RESULT');
       message('Νέα πιστωτική κάρτα ' || tok || ': το PIN για τον κάτοχο, δεν φαίνεται ξανά');
+
+    -- BK_LOANS: its installment (before), a new loan; the loan on the screen: what pays it off, a prepayment, its
+    -- schedule printed
+    ELSIF p_item IN ('CTL.QUOTE', 'CTL.NEWLOAN') THEN
+      acc := num('CTL.N_PAY_ID');
+      amt := num('CTL.N_AMOUNT');
+      IF p_item = 'CTL.QUOTE' THEN
+        e := bk_core.ln_quote(name_in('CTL.N_PRODUCT'), amt, num('CTL.N_MONTHS'));
+        copy('Δόση ' || money(e) || ' × ' || name_in('CTL.N_MONTHS') || ' μήνες, επιτόκιο '
+             || to_char(bk_core.ln_rate(name_in('CTL.N_PRODUCT'))) || '% (τώρα)', 'CTL.N_RESULT');
+      ELSE
+        IF acc IS NULL THEN
+          fail('Πρώτα ο λογαριασμός του πελάτη (λίστα): εκεί πάνε τα χρήματα, από εκεί πληρώνονται οι δόσεις');
+        END IF;
+        SELECT customer_id INTO id_ FROM bk_holder WHERE account_id = acc AND role = 'P';
+        acc := bk_core.ln_open(name_in('CTL.N_PRODUCT'), id_, amt, num('CTL.N_MONTHS'), acc, num('CTL.N_DAY'));
+        forms_ddl('COMMIT');
+        SELECT iban, currency INTO t, k FROM bk_account WHERE id = acc;
+        SELECT payment INTO amt FROM bk_ln_schedule WHERE account_id = acc AND n = 1;
+        copy('Νέο δάνειο ' || t || ': δόση ' || money(amt, k), 'CTL.N_RESULT');
+        copy('', 'CTL.N_AMOUNT');
+        show_only(acc);
+        message('Νέο δάνειο ' || t);
+      END IF;
+    ELSIF p_item IN ('CTL.PAYOFF', 'CTL.PREPAY', 'CTL.PAYALL', 'CTL.PRINTSCH') THEN
+      acc := num('LN.ID');
+      IF acc IS NULL THEN
+        fail('Πρώτα ένα δάνειο στην οθόνη');
+      END IF;
+      SELECT currency INTO k FROM bk_account WHERE id = acc;
+      IF p_item = 'CTL.PAYOFF' THEN
+        copy(money(bk_core.ln_payoff(acc), k), 'CTL.X_PAYOFF');
+      ELSIF p_item = 'CTL.PRINTSCH' THEN
+        SELECT start_date INTO d FROM bk_loan WHERE account_id = acc;
+        open_report('BK_LN_SCHEDULE', '&P_KIND=L&P_ACCOUNT=' || acc || '&P_FROM=' || to_char(d, 'DD/MM/YYYY')
+                                      || '&P_TO=31/12/2100');
+      ELSE
+        IF p_item = 'CTL.PAYALL' THEN
+          amt := bk_core.ln_payoff(acc);
+          e := bk_core.ln_prepay(acc, amt);
+          t := 'Το δάνειο εξοφλήθηκε: ' || money(amt, k);
+        ELSE
+          e := bk_core.ln_prepay(acc, num('CTL.P_AMOUNT'), nvl(name_in('CTL.P_MODE'), 'T'));
+          t := 'Πρόωρη εξόφληση: εγγραφή #' || e;
+        END IF;
+        forms_ddl('COMMIT');
+        copy('', 'CTL.P_AMOUNT');
+        copy('', 'CTL.X_PAYOFF');
+        show_only(acc);
+        message(t);
+      END IF;
 
     -- BK_FX: a rate of the currency on the screen; a currency new or changed, active or not; an amount converted
     ELSIF p_item IN ('CTL.SETFX', 'CTL.TOGGLECUR') THEN

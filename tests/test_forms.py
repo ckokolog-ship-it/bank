@@ -683,6 +683,8 @@ def test_the_currencies_in_the_forms(cur):
     assert 'BK-152' in fails(cur, "ui.press('CTL.SETFX');", CURR__ID=str(xid), CURR__CODE='XTS', CTL__R_DAY=day, CTL__R_MID='0')
     run(cur, "ui.press('CTL.TOGGLECUR');", CURR__ID=str(xid), CURR__CODE='XTS')
     assert cur.execute("select active from bk_currency where code = 'XTS'").fetchone()[0] == 'N'
+    run(cur, "ui.press('CTL.TOGGLECUR');", CURR__ID=str(xid), CURR__CODE='XTS')         # (again: the next run)
+    assert cur.execute("select active from bk_currency where code = 'XTS'").fetchone()[0] == 'Y'
     # an account in USD; a transfer to it from one in EUR
     compile_ui(cur, 'BK_CUSTOMERS')
     c = cur.callfunc('bk_core.new_customer', int, ['Test Φόρμες νόμισμα %d' % random.randrange(10 ** 6), afm()])
@@ -711,3 +713,50 @@ def test_the_currencies_in_the_forms(cur):
         run(cur, "ui.press('CTL.SETRATE');", PROD__ID=str(pid[0]), CTL__N_FROM=day, CTL__N_MIN='0', CTL__N_RATE='1.5',
             CTL__N_CURRENCY='USD')
         assert cur.execute("select rate from bk_rate where product_id = :p and currency = 'USD'", p=pid[0]).fetchone()[0] == 1.5
+
+
+@needs_db
+def test_the_loans(cur):
+    """its installment first, a new loan (to an account of the customer), what pays it off, a prepayment (the same
+    installment, fewer), its schedule printed (BK_LN_SCHEDULE), paid off"""
+    compile_ui(cur, 'BK_LOANS')
+    run(cur, 'ui.init;')
+    assert item(cur, 'CTL.P_MODE_TEXT') == 'Ίδια δόση, λιγότερες δόσεις'
+    run(cur, "ui.press('CTL.QUOTE');", CTL__N_PRODUCT='CONS', CTL__N_AMOUNT='12000', CTL__N_MONTHS='24')
+    r = 0.095 / 12
+    want = round(12000 * r / (1 - (1 + r) ** -24), 2)
+    assert item(cur, 'CTL.N_RESULT').startswith('Δόση %s € × 24 μήνες' % ('{:,.2f}'.format(want).replace(',', 'X').replace('.', ',').replace('X', '.')))
+    assert 'Πρώτα ο λογαριασμός' in fails(cur, "ui.press('CTL.NEWLOAN');", CTL__N_PRODUCT='CONS', CTL__N_AMOUNT='12000',
+                                          CTL__N_MONTHS='24')
+    p = new_account(cur, 500)
+    run(cur, "ui.press('CTL.NEWLOAN');", CTL__N_PAY_ID=str(p), CTL__N_PRODUCT='CONS', CTL__N_AMOUNT='12000',
+        CTL__N_MONTHS='24', CTL__N_DAY='10')
+    a = cur.execute('select account_id from bk_loan where pay_account_id = :p', p=p).fetchone()[0]
+    assert 'LN:id = %d;' % a in queries(cur) and 'Νέο δάνειο' in msgs(cur)
+    assert cur.execute('select balance from bk_account where id = :p', p=p).fetchone()[0] == 12500
+    assert 'BK-156' in fails(cur, "ui.press('CTL.NEWLOAN');", CTL__N_PAY_ID=str(p), CTL__N_PRODUCT='CONS',
+                             CTL__N_AMOUNT='1000', CTL__N_MONTHS='100')
+    run(cur, "ui.press('CTL.PAYOFF');", LN__ID=str(a))
+    off = cur.callfunc('bk_core.ln_payoff', float, [a])
+    assert item(cur, 'CTL.X_PAYOFF') == '{:,.2f} €'.format(off).replace(',', 'X').replace('.', ',').replace('X', '.')
+    run(cur, "ui.press('CTL.PREPAY');", LN__ID=str(a), CTL__P_AMOUNT='2000', CTL__P_MODE='T')
+    assert 'Πρόωρη εξόφληση' in msgs(cur)
+    assert cur.execute("select count(*) from bk_ln_schedule where account_id = :a and status = 'D'", a=a).fetchone()[0] < 24
+    old = cur.execute("select name, value from bk_setting where name like 'REPORTS%'").fetchall()
+    try:
+        cur.execute("delete from bk_setting where name like 'REPORTS%'")
+        cur.execute("insert into bk_setting (name, value) values ('REPORTS_URL', 'http://x:9012/reports/rwservlet?bank')")
+        cur.connection.commit()
+        run(cur, "ui.press('CTL.PRINTSCH');", LN__ID=str(a))
+        d = cur.execute("select to_char(start_date, 'DD/MM/YYYY') from bk_loan where account_id = :a", a=a).fetchone()[0]
+        assert prop(cur, 'SHOW_DOCUMENT') == ('http://x:9012/reports/rwservlet?bank&report=BK_LN_SCHEDULE.rdf&destype=cache'
+                                              '&desformat=PDF&P_KIND=L&P_ACCOUNT=%d&P_FROM=%s&P_TO=31/12/2100 _blank' % (a, d))
+    finally:
+        cur.execute("delete from bk_setting where name like 'REPORTS%'")
+        for n, v in old:
+            cur.execute('insert into bk_setting (name, value) values (:n, :v)', n=n, v=v)
+        cur.connection.commit()
+    run(cur, "ui.press('CTL.PAYALL');", LN__ID=str(a))
+    assert 'εξοφλήθηκε' in msgs(cur)
+    assert cur.execute('select status from bk_loan where account_id = :a', a=a).fetchone()[0] == 'C'
+    assert 'Πρώτα ένα δάνειο' in fails(cur, "ui.press('CTL.PAYOFF');")

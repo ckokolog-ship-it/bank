@@ -203,7 +203,9 @@ def test_a_pin_to_many_cards(base, conn):
     assert s == 400 and r['error'] == 'bad_pin'
     rows = ok(base, '/api/cards/pins', {'pin': '4827'}, 'tst-manager')
     assert k in [x['id'] for x in rows] and all(x['pin'] == '4827' for x in rows)
-    assert cur.execute('select count(*) from bk_card where pin_hash is null and status = \'A\'').fetchone()[0] == 0
+    # (every card that may be used: active, not expired, its account not closed)
+    assert cur.execute("select count(*) from bk_card k join bk_account a on a.id = k.account_id where k.pin_hash is null "
+                       "and k.status = 'A' and k.expires >= bk_core.open_day and a.status <> 'C'").fetchone()[0] == 0
     login(base, {'pan': pan, 'pin': '4827'})
     assert ok(base, '/api/cards/pins', {}, 'tst-manager') == []      # none without a PIN now
     rows = ok(base, '/api/cards/pins', {'all': True}, 'tst-manager')  # every card: a new one each
