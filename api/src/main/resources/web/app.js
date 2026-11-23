@@ -172,6 +172,7 @@ const MENU = [
   { key: 'accounts', title: '💳 Λογαριασμοί', items: [['accounts', 'Αναζήτηση'], ['move', 'Νέα κίνηση'], ['loans', 'Δάνεια']] },
   { key: 'bank', title: '🏦 Τράπεζα', items: [['rules', 'Κανόνες κινήσεων'], ['products', 'Προϊόντα και επιτόκια'],
     ['fx', 'Νομίσματα και ισοτιμίες'], ['branches', 'Υποκαταστήματα'], ['atms', 'ATM'], ['day', 'Ημέρα και κλείσιμο']] },
+  { key: 'ai', title: '🤖 Ύποπτες κινήσεις', role: 'MANAGER', items: [['ai', 'Ειδοποιήσεις και μοντέλο']] },
   { key: 'admin', title: '🔐 Διαχείριση', role: 'ADMIN', items: [['users', 'Χρήστες']] }];
 // the item of the menu of a page (a customer: of the customers, an account or an entry: of the accounts)
 const MENU_OF = { customer: 'customers', account: 'accounts', entry: 'accounts', loan: 'loans' };
@@ -232,7 +233,7 @@ async function route() {
   const m = $('main');
   m.replaceChildren(h('p', { class: 'muted' }, 'Φόρτωση…'));
   try {
-    const f = { customers, customer, accounts, account, move, entry, loans, loan, rules, products, fx, branches, atms, day, users }[page] || customers;
+    const f = { customers, customer, accounts, account, move, entry, loans, loan, rules, products, fx, branches, atms, day, ai, users }[page] || customers;
     const el = await f(id, extra);
     m.replaceChildren(el);
   } catch (e) {
@@ -1014,6 +1015,70 @@ async function day() {
       try { const r = await api('day/close', {}); toast('Έκλεισε η ' + date(r.closed)); route(); } catch (e) { toast(e.message, true); ev.target.disabled = false; }
     } }, 'Κλείσιμο της ' + date(d.open_day)));
   }
+  return box;
+}
+
+// ---- the suspicious movements (db/BK_AI.sql: a model of Oracle Machine Learning in the database)
+const AI_STATUS = { N: 'Νέα', C: 'Δεν είναι απάτη', F: 'Απάτη' };
+
+async function ai() {
+  const box = h('div');
+  const st = h('select', null, h('option', { value: 'N' }, 'Νέες'), h('option', { value: '' }, 'Όλες'),
+    h('option', { value: 'F' }, 'Απάτες'), h('option', { value: 'C' }, 'Δεν ήταν απάτη'));
+  const info = h('p', { class: 'muted' });
+  const list = h('div');
+  async function model() {
+    const m = await api('ai/model');
+    info.textContent = m.info;
+  }
+  async function review(a, status) {
+    const note = prompt(status === 'F' ? 'Απάτη: ο λογαριασμός ' + a.iban + ' θα δεσμευτεί. Σημείωση:' : 'Δεν είναι απάτη. Σημείωση:', '');
+    if (note === null) return;
+    try {
+      await api('ai/alerts/' + a.id, { status, note });
+      toast(status === 'F' ? 'Απάτη: ο λογαριασμός δεσμεύτηκε' : 'Η ειδοποίηση έκλεισε');
+      load(); model();
+    } catch (e) { toast(e.message, true); }
+  }
+  async function load() {
+    const rows = await api('ai/alerts?limit=200&status=' + st.value);
+    list.replaceChildren(rows.length ? table(['Ημέρα', 'Ώρα', 'Λογαριασμός', 'Δικαιούχος', 'Κίνηση', '#Ποσό', '#Βαθμός', 'Γιατί (το μοντέλο)', 'Κατάσταση', ''],
+      rows.map((a) => h('tr', null, td(date(a.book_date)), td(a.at_time, 'mono'),
+        td(h('a', { href: '#/account/' + a.account_id }, iban(a.iban)), 'mono'), td(a.holder),
+        td((KINDS[a.kind] || a.kind) + (a.kind === 'PUR' ? '' : ' · ' + (CHANNELS[a.channel] || a.channel))),
+        tdn(amt(a.amount, a.currency)),
+        tdn(h('span', { class: 'badge ' + (a.score >= 0.8 ? 'no' : 'B') }, num(a.score, 3))),
+        td(a.reasons),
+        td(a.status === 'N' ? h('span', { class: 'badge B' }, AI_STATUS.N)
+          : h('span', { class: 'badge ' + (a.status === 'F' ? 'no' : 'C') }, AI_STATUS[a.status], a.reviewed_by ? ' · ' + a.reviewed_by : '')),
+        td(a.status === 'N' ? h('div', { class: 'row' },
+          h('button', { onclick: () => review(a, 'C') }, 'Εντάξει'),
+          h('button', { onclick: () => review(a, 'F') }, 'Απάτη')) : (a.note || '')))))
+      : h('p', { class: 'muted' }, 'Καμία ειδοποίηση.'));
+  }
+  st.addEventListener('change', load);
+  const day = h('input', { type: 'date', value: S.day ? S.day.open_day : '' });
+  const actions = h('div', { class: 'row' }, day,
+    h('button', { onclick: async (ev) => {
+      ev.target.disabled = true;
+      try { const r = await api('ai/scan', { day: day.value || null }); toast('Σάρωση: ' + r.new_alerts + ' νέες ειδοποιήσεις'); load(); model(); } catch (e) { toast(e.message, true); }
+      ev.target.disabled = false;
+    } }, 'Σάρωση της ημέρας'));
+  if (can('ADMIN')) {
+    actions.append(h('button', { onclick: async (ev) => {
+      if (!confirm('Εκπαίδευση του μοντέλου από όλες τις κινήσεις των ημερών που έκλεισαν;')) return;
+      ev.target.disabled = true;
+      try { const r = await api('ai/train', {}); toast('Το μοντέλο έμαθε από ' + r.rows + ' κινήσεις'); model(); } catch (e) { toast(e.message, true); }
+      ev.target.disabled = false;
+    } }, 'Εκπαίδευση μοντέλου'));
+  }
+  box.append(h('div', { class: 'card' }, h('h2', null, 'Ύποπτες κινήσεις'),
+    h('p', { class: 'muted' }, 'Ένα μοντέλο ανίχνευσης ανωμαλιών (One-Class SVM, Oracle Machine Learning) μέσα στη βάση μαθαίνει τι είναι συνηθισμένο από τις κινήσεις των ημερών που έκλεισαν: ποσό σε σχέση με τον λογαριασμό, ώρα, κανάλι, νόμισμα, πόσες κινήσεις την ημέρα. Κάθε κίνηση παίρνει βαθμό: την πιθανότητα να μην είναι συνηθισμένη. Πάνω από το όριο γίνεται ειδοποίηση, με τους λόγους του μοντέλου. Η σάρωση γίνεται και στο κλείσιμο κάθε ημέρας.'),
+    info, actions));
+  box.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', null, 'Ειδοποιήσεις'), st), list));
+  if (!S.day) await refreshDay().catch(() => {});
+  if (S.day && !day.value) day.value = S.day.open_day;
+  await Promise.all([model(), load()]);
   return box;
 }
 

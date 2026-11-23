@@ -410,3 +410,24 @@ def test_the_branches(base):
     # the loans of a branch
     assert all(x['branch_code'] == '0002' for x in ok(base, '/api/loans?status=&branch=0002'))
     assert ok(base, '/api/loans?status=&branch=9999') == []
+
+
+def test_the_suspicious_movements(base, conn):
+    """/api/ai: the model, the alerts, the scan (MANAGER); the training (ADMIN); an alert reviewed"""
+    if not conn.cursor().execute("select count(*) from session_privs where privilege = 'CREATE MINING MODEL'").fetchone()[0]:
+        pytest.skip('no CREATE MINING MODEL: db/GRANT_AI.sql')
+    assert call(base, '/api/ai/model', token=tok(base, 'tst-teller'))[0] == 403
+    m = ok(base, '/api/ai/model', who='tst-manager')
+    assert m['ready'] in ('Y', 'N') and m['info'] and m['threshold'] > 0
+    assert call(base, '/api/ai/train', {}, tok(base, 'tst-manager'))[0] == 403
+    r = ok(base, '/api/ai/train', {}, who='tst-admin')
+    assert r['ready'] == 'Y' and r['rows'] >= 200
+    r = ok(base, '/api/ai/scan', {}, who='tst-manager')
+    assert r['new_alerts'] >= 0
+    assert isinstance(ok(base, '/api/ai/alerts?status=', who='tst-manager'), list)
+    s, r = call(base, '/api/ai/alerts/-1', {'status': 'C'}, tok(base, 'tst-manager'))
+    assert s == 400 and r['error'] == 'BK-172'
+    rows = ok(base, '/api/ai/alerts?status=N', who='tst-manager')
+    if rows:
+        x = ok(base, '/api/ai/alerts/%d' % rows[0]['id'], {'status': 'C', 'note': 'test'}, who='tst-manager')
+        assert x['status'] == 'C' and x['note'] == 'test' and x['reviewed_by'] == 'tst-manager'

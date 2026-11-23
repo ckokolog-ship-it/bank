@@ -844,3 +844,36 @@ def test_the_branch_filter_and_the_cash_report(cur):
         for n, v in old:
             cur.execute('insert into bk_setting (name, value) values (:n, :v)', n=n, v=v)
         cur.connection.commit()
+
+
+@needs_db
+def test_the_suspicious_movements(cur):
+    """BK_AI: the model in a line when it opens; the scan of a day; an alert not a fraud, or a fraud (its account
+    blocked); the training: ADMIN only"""
+    if not cur.execute("select count(*) from session_privs where privilege = 'CREATE MINING MODEL'").fetchone()[0]:
+        pytest.skip('no CREATE MINING MODEL: db/GRANT_AI.sql')
+    compile_ui(cur, 'BK_AI')
+    run(cur, 'ui.init;')
+    assert 'ειδοποιήσεις' in item(cur, 'CTL.X_MODEL') and item(cur, 'CTL.S_DAY')
+    run(cur, "ui.press('CTL.SCAN');", CTL__S_DAY=item(cur, 'CTL.S_DAY') or '')
+    assert 'νέες ειδοποιήσεις' in msgs(cur)
+    assert 'Πρώτα' in fails(cur, "ui.press('CTL.OKAY');")
+    a, b = new_account(cur, 500), new_account(cur, 500)
+    ids = []
+    for x in (a, b):
+        cur.callfunc('bk_core.withdraw', int, [x, 100])
+        ln = cur.execute('select max(id) from bk_line where account_id = :a', a=x).fetchone()[0]
+        e = cur.execute('select entry_id from bk_line where id = :l', l=ln).fetchone()[0]
+        cur.execute("insert into bk_ai_alert (line_id, entry_id, account_id, score, reasons) "
+                    "values (:l, :e, :a, 0.9, 'test') returning id into :i", l=ln, e=e, a=x, i=cur.var(int))
+        ids.append(cur.execute('select id from bk_ai_alert where line_id = :l', l=ln).fetchone()[0])
+    cur.connection.commit()
+    run(cur, "ui.press('CTL.OKAY');", AL__ID=str(ids[0]), CTL__R_NOTE='γνωστός πελάτης')
+    assert 'δεν είναι απάτη' in msgs(cur)
+    run(cur, "ui.press('CTL.FRAUD');", AL__ID=str(ids[1]), AL__IBAN='GR..')
+    assert 'δεσμεύτηκε' in msgs(cur)
+    assert cur.execute('select status, note from bk_ai_alert where id = :i', i=ids[0]).fetchone() == ('C', 'γνωστός πελάτης')
+    assert cur.execute('select status from bk_account where id = :a', a=b).fetchone()[0] == 'B'
+    assert cur.execute('select status from bk_account where id = :a', a=a).fetchone()[0] == 'O'
+    # the training: the manager cannot
+    assert 'ADMIN' in fails(cur, "ui.press('CTL.TRAIN');")

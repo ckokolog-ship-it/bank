@@ -2,6 +2,17 @@
 --   sqlplus bank/<password>@FREEPDB1 @UNINSTALL.sql
 set feedback off
 whenever sqlerror continue
+drop package if exists bk_ai;
+begin
+  dbms_data_mining.drop_model('BK_AI_FRAUD', true);
+exception
+  when others then
+    null;
+end;
+/
+drop view if exists bk_ai_alert_v;
+drop view if exists bk_ai_features;
+drop table if exists bk_ai_alert purge;
 drop package if exists bk_auth;
 drop package if exists bk_report;
 drop package if exists bk_text;
