@@ -71,9 +71,9 @@ def test_a_question_without_a_language_model(rag):
                   "and r.currency = 'EUR' and r.min_balance = 5000")[0].rstrip('0').rstrip(',')
     assert src[0][1] == 'DB:calc' and 'για υπόλοιπο 12.000,00 EUR' in src[0][3]
     assert 'SAV «Ταμιευτήριο»: %s%%' % want in src[0][3] and 'SAVP «Ταμιευτήριο Plus»: 1%' in src[0][3]
-    assert any(s[2] == 'Προϊόν SAV Ταμιευτήριο' for s in src) and len(src) == 7
+    assert any(s[2] == 'Προϊόν SAV Ταμιευτήριο' for s in src) and len(src) == 5
     (_, _, _, _, _), src = ask(db, 'Πόσα μπορεί να σηκώσει ένας πελάτης από ATM την ημέρα;')
-    assert src[0][1] != 'DB:calc' and len(src) == 6 and any('ATM' in (s[2] + s[3]) for s in src)
+    assert src[0][1] != 'DB:calc' and len(src) == 4 and any('ATM' in (s[2] + s[3]) for s in src)
     with pytest.raises(oracledb.DatabaseError, match='BK-176'):
         ask(db, '   ')
 

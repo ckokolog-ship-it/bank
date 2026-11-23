@@ -456,7 +456,7 @@ def test_the_assistant(base, conn):
     if conn.cursor().execute('select bk_vec.ready from dual').fetchone()[0] != 'Y':
         pytest.skip('no model BK_EMBED: ai/mk_embed_model.sh, db/LOAD_EMBED.sql')
     r = ok(base, '/api/ai/ask', {'question': 'Πόσο κοστίζει μια ανάληψη στο γκισέ;'})
-    assert r['question'] and r['asked_by'] == 'tst-teller' and len(r['sources']) == 6
+    assert r['question'] and r['asked_by'] == 'tst-teller' and len(r['sources']) == 4
     assert r['answer'] or r['error']
     assert all(s['text'] and s['similarity'] > 0 for s in r['sources'])
     assert call(base, '/api/ai/ask', {}, tok(base, 'tst-teller'))[0] == 400
