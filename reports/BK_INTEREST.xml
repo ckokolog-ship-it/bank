@@ -86,58 +86,58 @@ order by seq]]>
           <geometryInfo x="0.00000" y="0.00000" width="7.30000" height="0.17000"/>
           <generalLayout verticalElasticity="expand"/>
           <field name="F_LDATE" source="LDATE" minWidowLines="1" spacing="0" alignment="start" formatMask="DD/MM/YYYY">
-            <font face="Arial" size="8"/>
+            <font face="Helvetica" size="8"/>
             <geometryInfo x="0.00000" y="0.00000" width="0.72000" height="0.17000"/>
           </field>
           <field name="F_DOC_TEXT" source="DOC_TEXT" minWidowLines="1" spacing="0" alignment="start">
-            <font face="Arial" size="8"/>
+            <font face="Helvetica" size="8"/>
             <geometryInfo x="0.75000" y="0.00000" width="0.72000" height="0.17000"/>
           </field>
           <field name="F_DESCR" source="DESCR" minWidowLines="1" spacing="0" alignment="start">
-            <font face="Arial" size="8"/>
+            <font face="Helvetica" size="8"/>
             <geometryInfo x="1.50000" y="0.00000" width="2.55000" height="0.17000"/>
           </field>
           <field name="F_DEBIT" source="DEBIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D00">
-            <font face="Arial" size="8"/>
+            <font face="Helvetica" size="8"/>
             <geometryInfo x="4.08000" y="0.00000" width="0.95000" height="0.17000"/>
           </field>
           <field name="F_CREDIT" source="CREDIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-            <font face="Arial" size="8"/>
+            <font face="Helvetica" size="8"/>
             <geometryInfo x="5.06000" y="0.00000" width="1.00000" height="0.17000"/>
           </field>
           <field name="F_BALANCE" source="BALANCE" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-            <font face="Arial" size="8"/>
+            <font face="Helvetica" size="8"/>
             <geometryInfo x="6.09000" y="0.00000" width="1.15000" height="0.17000"/>
           </field>
         </repeatingFrame>
         <frame name="M_TOTALS">
           <geometryInfo x="0.00000" y="0.25500" width="7.30000" height="0.64600"/>
           <field name="F_OPEN" source="CF_L_OPEN" minWidowLines="1" spacing="0" alignment="end">
-            <font face="Arial" size="8" bold="yes"/>
+            <font face="Helvetica" size="8" bold="yes"/>
             <geometryInfo x="1.50000" y="0.28900" width="2.55000" height="0.17000"/>
           </field>
           <field name="F_OPEN_B" source="CS_OPEN" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-            <font face="Arial" size="8" bold="yes"/>
+            <font face="Helvetica" size="8" bold="yes"/>
             <geometryInfo x="6.09000" y="0.28900" width="1.15000" height="0.17000"/>
           </field>
           <field name="F_TOTALS" source="CF_L_TOTALS" minWidowLines="1" spacing="0" alignment="end">
-            <font face="Arial" size="8" bold="yes"/>
+            <font face="Helvetica" size="8" bold="yes"/>
             <geometryInfo x="1.50000" y="0.49300" width="2.55000" height="0.17000"/>
           </field>
           <field name="F_T_DEBIT" source="CS_T_DEBIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D00">
-            <font face="Arial" size="8" bold="yes"/>
+            <font face="Helvetica" size="8" bold="yes"/>
             <geometryInfo x="4.08000" y="0.49300" width="0.95000" height="0.17000"/>
           </field>
           <field name="F_T_CREDIT" source="CS_T_CREDIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-            <font face="Arial" size="8" bold="yes"/>
+            <font face="Helvetica" size="8" bold="yes"/>
             <geometryInfo x="5.06000" y="0.49300" width="1.00000" height="0.17000"/>
           </field>
           <field name="F_CLOSE" source="CF_L_CLOSE" minWidowLines="1" spacing="0" alignment="end">
-            <font face="Arial" size="8" bold="yes"/>
+            <font face="Helvetica" size="8" bold="yes"/>
             <geometryInfo x="1.50000" y="0.69700" width="2.55000" height="0.17000"/>
           </field>
           <field name="F_CLOSE_B" source="CS_CLOSE" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-            <font face="Arial" size="8" bold="yes"/>
+            <font face="Helvetica" size="8" bold="yes"/>
             <geometryInfo x="6.09000" y="0.69700" width="1.15000" height="0.17000"/>
           </field>
         </frame>
@@ -145,75 +145,75 @@ order by seq]]>
     </body>
     <margin>
         <field name="F_TITLE" source="CF_TITLE" minWidowLines="1" spacing="0" alignment="start">
-          <font face="Arial" size="12" bold="yes"/>
+          <font face="Helvetica" size="12" bold="yes"/>
           <geometryInfo x="0.40000" y="0.30000" width="5.60000" height="0.24000"/>
         </field>
         <field name="F_PERIOD" source="CF_PERIOD" minWidowLines="1" spacing="0" alignment="start">
-          <font face="Arial" size="9"/>
+          <font face="Helvetica" size="9"/>
           <geometryInfo x="0.40000" y="0.58000" width="5.00000" height="0.20000"/>
         </field>
         <field name="F_L_PAGE" source="CF_L_PAGE" minWidowLines="1" spacing="0" alignment="end">
-          <font face="Arial" size="9"/>
-          <geometryInfo x="6.30000" y="0.30000" width="0.60000" height="0.20000"/>
+          <font face="Helvetica" size="9"/>
+          <geometryInfo x="6.00000" y="0.30000" width="0.90000" height="0.20000"/>
         </field>
         <field name="F_PAGE" source="PageNumber" minWidowLines="1" spacing="0" alignment="start">
-          <font face="Arial" size="9"/>
+          <font face="Helvetica" size="9"/>
           <geometryInfo x="6.95000" y="0.30000" width="0.60000" height="0.20000"/>
         </field>
         <field name="F_H_LDATE" source="CF_L_DATE" minWidowLines="1" spacing="0" alignment="start">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="0.40000" y="0.88000" width="0.72000" height="0.17000"/>
         </field>
         <field name="F_H_DOC_TEXT" source="CF_L_DOC" minWidowLines="1" spacing="0" alignment="start">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="1.15000" y="0.88000" width="0.72000" height="0.17000"/>
         </field>
         <field name="F_H_DESCR" source="CF_L_DESCR" minWidowLines="1" spacing="0" alignment="start">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="1.90000" y="0.88000" width="2.55000" height="0.17000"/>
         </field>
         <field name="F_H_DEBIT" source="CF_L_DEBIT" minWidowLines="1" spacing="0" alignment="end">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="4.48000" y="0.88000" width="0.95000" height="0.17000"/>
         </field>
         <field name="F_H_CREDIT" source="CF_L_CREDIT" minWidowLines="1" spacing="0" alignment="end">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="5.46000" y="0.88000" width="1.00000" height="0.17000"/>
         </field>
         <field name="F_H_BALANCE" source="CF_L_BALANCE" minWidowLines="1" spacing="0" alignment="end">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="6.49000" y="0.88000" width="1.15000" height="0.17000"/>
         </field>
         <field name="F_FROM" source="CF_L_FROM_CARRY" minWidowLines="1" spacing="0" alignment="end">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="1.90000" y="1.10000" width="2.55000" height="0.17000"/>
         </field>
         <field name="F_PF_DEBIT" source="CS_PF_DEBIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D00">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="4.48000" y="1.10000" width="0.95000" height="0.17000"/>
         </field>
         <field name="F_PF_CREDIT" source="CS_PF_CREDIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="5.46000" y="1.10000" width="1.00000" height="0.17000"/>
         </field>
         <field name="F_PF_BALANCE" source="CS_PF_BALANCE" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="6.49000" y="1.10000" width="1.15000" height="0.17000"/>
         </field>
         <field name="F_TO" source="CF_L_TO_CARRY" minWidowLines="1" spacing="0" alignment="end">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="1.90000" y="11.00000" width="2.55000" height="0.17000"/>
         </field>
         <field name="F_PL_DEBIT" source="CS_PL_DEBIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D00">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="4.48000" y="11.00000" width="0.95000" height="0.17000"/>
         </field>
         <field name="F_PL_CREDIT" source="CS_PL_CREDIT" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="5.46000" y="11.00000" width="1.00000" height="0.17000"/>
         </field>
         <field name="F_PL_BALANCE" source="CS_PL_BALANCE" minWidowLines="1" spacing="0" alignment="end" formatMask="NNNGNNNGNN0D000000">
-          <font face="Arial" size="8" bold="yes"/>
+          <font face="Helvetica" size="8" bold="yes"/>
           <geometryInfo x="6.49000" y="11.00000" width="1.15000" height="0.17000"/>
         </field>
     </margin>

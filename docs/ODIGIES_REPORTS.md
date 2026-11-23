@@ -44,9 +44,14 @@ cd ~/bank/forms && ./build_forms.sh /@BK_DB BK_ACCOUNTS    # τα νέα κου�
 ### Τα ελληνικά στο PDF (μία φορά)
 
 Όταν το HTML βγαίνει σωστό και το PDF έχει «ιερογλυφικά», φταίει η γραμματοσειρά του PDF:
-- **Γιατί:** οι γραμματοσειρές που έχει μέσα του ένα PDF δεν έχουν ελληνικά, και ο Reports Server βάζει στη θέση τους μια TrueType, σύμφωνα με το `uifont.ali` (`[ PDF:Subset ]`). Τα reports ζητούν `Arial`, που στο Linux δεν αντιστοιχίζεται πουθενά.
+- **Γιατί:** οι γραμματοσειρές που έχει μέσα του ένα PDF δεν έχουν ελληνικά, και ο Reports Server βάζει στη θέση τους μια TrueType, σύμφωνα με το `uifont.ali` (`[ PDF:Subset ]`).
+- **Η γραμματοσειρά των πεδίων:** τα reports ζητούν `Helvetica`, που υπάρχει στο Linux. Αρχικά ζητούσαν `Arial`, που στο Linux δεν υπάρχει, και το `rwconverter` έβαζε στη θέση της **Symbol**. Το σύμπτωμα ήταν:
+  - το IBAN έβγαινε «ΓΡ…» αντί για «GR…», ήδη στο HTML·
+  - τα ελληνικά έβγαιναν μαθηματικά σύμβολα στο PDF.
+
+  Αν το ξαναδείς, τα reports είναι χτισμένα από παλιό XML: `./build_reports.sh`.
 - **Τι κάνει το `pdf_fonts.sh`:**
-  - αντιστοιχίζει το `Arial` στο DejaVu Sans, που έχει ελληνικά (και τα έντονα στο DejaVu Sans Bold), όπως και τα `Helvetica`, `Courier`, `Courier New`·
+  - αντιστοιχίζει τα `Helvetica`, `Arial`, `Courier` και `Courier New` στο DejaVu, που έχει ελληνικά (και τα έντονα στο DejaVu Bold)·
   - βάζει τις γραμματοσειρές στο `/u01/app/oracle/fonts`·
   - ελέγχει το περιβάλλον του `WLS_REPORTS` (`REPORTS_FONT_DIRECTORY`, `TK_FONTALIAS`, `NLS_LANG`) στο `setUserOverrides.sh`·
   - κρατά πρώτα αντίγραφο κάθε αρχείου που αλλάζει (`.bk-<ημερομηνία>`), και μια δεύτερη εκτέλεση δεν αλλάζει τίποτα.
@@ -64,7 +69,7 @@ sudo -iu oracle ~oracle/bank/reports/pdf_fonts.sh --check     # μετά από 
 - τις αντιστοιχίσεις του `uifont.ali`·
 - τις γραμματοσειρές ενός PDF του `BK_STATEMENT`. Σωστό είναι `DejaVuSans` με `emb yes`.
 
-Τα reports δεν χρειάζεται να ξαναχτιστούν. Η ίδια αντιστοίχιση διορθώνει και τα PDF του mini market, που ζητούν επίσης `Arial`.
+Τα reports του mini market ζητούν ακόμα `Arial`. Αν χτιστούν στο forms1, θέλουν την ίδια αλλαγή (`FONT` στο `mkreports.py`).
 
 Αν δεν υπάρχει οθόνη από το session, το `build_reports.sh` χρησιμοποιεί εικονική (`xvfb-run`), όπως και το `build_forms.sh`. Με `XML_DISPLAY=session` ή `XML_DISPLAY=xvfb` διαλέγεις ποια από τις δύο.
 
