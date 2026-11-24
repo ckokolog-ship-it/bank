@@ -38,3 +38,10 @@ def test_db_host():
 def test_db_host_refuses_without_arguments():
     r = subprocess.run(['bash', os.path.join(DG, 'db_host.sh')], capture_output=True, text=True)
     assert r.returncode != 0
+
+
+def test_vms_ps1_splits_the_names():
+    # powershell -File passes -Names db1,db2 as the one string 'db1,db2' (it made a VM 'db1,db2')
+    with open(os.path.join(DG, '..', 'k8s', 'vms.ps1'), encoding='utf-8') as f:
+        s = f.read()
+    assert "-split ','" in s and 'Resolve-Path $Iso' in s
