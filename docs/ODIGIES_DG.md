@@ -224,4 +224,85 @@ select count(*) from bk_account;
 select bk_vec.model_info from dual;
 ```
 
-Επόμενο βήμα: ο standby στον db2.
+## 7. Ο standby στον db2
+
+Ο db2 γίνεται **physical standby**: ένα ακριβές αντίγραφο της βάσης του db1, που παίρνει και εφαρμόζει κάθε αλλαγή.
+
+**Στο forms1** (ως `oracle`), τα scripts:
+
+```bash
+cd ~/bank && git pull
+scp dg/standby.sh chris@192.168.178.222:
+scp dg/broker.sh chris@192.168.178.221:
+```
+
+**Στον db1**: το password file πάει στον db2. Πρέπει να είναι **το ίδιο αρχείο**, αλλιώς ο db2 δεν δέχεται το redo.
+
+```bash
+sudo cp /u01/app/oracle/product/26ai/dbhome_1/dbs/orapwBANK ~/ && sudo chown chris: ~/orapwBANK
+scp ~/orapwBANK chris@192.168.178.222: && rm ~/orapwBANK
+```
+
+**Στον db2:**
+
+```bash
+sudo bash ~/standby.sh
+```
+
+Τι κάνει (10–30 λεπτά):
+
+- **Listener** με στατικές εγγραφές:
+  - `BANK_DB2`, για να συνδέεται το RMAN όσο η βάση είναι μόνο ξεκινημένη (NOMOUNT);
+  - `BANK_DB2_DGMGRL`, για τον Broker.
+- **`tnsnames.ora`**, ίδιο με του db1.
+- **RMAN `DUPLICATE ... FOR STANDBY FROM ACTIVE DATABASE`**:
+  - τα αρχεία έρχονται από τον db1 μέσω δικτύου, χωρίς backup;
+  - το spfile αντιγράφεται με `db_unique_name = BANK_DB2`.
+- Το RMAN **ζητά δύο φορές τον κωδικό του SYS**: μία για τον db1 (target) και μία για τον db2 (auxiliary). Είναι ο ίδιος κωδικός. Αν έχει `@`, γράψ' τον **μέσα σε διπλά εισαγωγικά**.
+- Flashback, ο Broker ξεκινά, και η βάση ξεκινά μαζί με το VM (`oracle-bank`).
+
+Στο τέλος:
+
+```
+NAME     DB_UNIQUE_NA DATABASE_ROLE    OPEN_MODE   FLASHBACK_ON
+BANK     BANK_DB2     PHYSICAL STANDBY MOUNTED     YES
+```
+
+Αν το RMAN αποτύχει, το log του είναι στο `/u01/app/oracle/dup_standby.log`: `sudo tail -40 /u01/app/oracle/dup_standby.log`.
+
+## 8. Ο Broker (db1)
+
+**Στον db1:**
+
+```bash
+sudo bash ~/broker.sh
+```
+
+Φτιάχνει τη διαμόρφωση `BANK`:
+- `BANK_DB1` primary;
+- `BANK_DB2` physical standby.
+
+Μετά την ενεργοποιεί. Από εκεί και πέρα το redo πηγαίνει μόνο του στον db2 και εφαρμόζεται. Στο τέλος δείχνει:
+
+```
+Configuration - bank
+  Protection Mode: MaxPerformance
+  Members:
+  BANK_DB1 - Primary database
+    BANK_DB2 - Physical standby database
+Configuration Status:
+SUCCESS
+```
+
+Το `validate database BANK_DB2` λέει αν ο db2 είναι έτοιμος για switchover (`Ready for Switchover: Yes`).
+
+Έλεγχος, ως `oracle` στον db1:
+
+```bash
+dgmgrl /
+```
+```
+show configuration lag;
+```
+
+Επόμενο βήμα: το Fast-Start Failover, με τον observer στο forms1.
