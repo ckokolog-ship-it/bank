@@ -125,4 +125,55 @@ $ORACLE_HOME/OPatch/opatch lspatches
 | `runInstaller: 1` (ή άλλο νούμερο) | Το log είναι στο `/u01/app/oraInventory/logs/`. Στείλε μου τις τελευταίες γραμμές: `sudo tail -50 /u01/app/oraInventory/logs/InstallActions*/installActions*.log` |
 | `No space left on device` | `df -h /u01 ~`. Μετά την εγκατάσταση σβήσε το zip: `rm ~/LINUX.X64_2326100_db_home.zip` |
 
-Επόμενο βήμα: η βάση `BANK` στον db1.
+Μετά την εγκατάσταση σβήσε το zip: `rm ~/LINUX.X64_2326100_db_home.zip`.
+
+## 5. Η βάση στον db1 (primary)
+
+Από το forms1 (ως `oracle`) πάει το script στον db1:
+
+```bash
+cd ~/bank && git pull
+scp dg/primary.sh chris@192.168.178.221:
+```
+
+Με ssh στον db1:
+
+```bash
+sudo bash ~/primary.sh
+```
+
+Τι κάνει (περίπου 15–30 λεπτά):
+
+- **Listener** στη θύρα 1521. Έχει και μια στατική εγγραφή `BANK_DB1_DGMGRL`, ώστε ο Broker να μπορεί να ξεκινήσει τη βάση σε switchover.
+- **`tnsnames.ora`** με τα `BANK_DB1`, `BANK_DB2` και `BANKPDB`. Το `BANKPDB` δοκιμάζει πρώτα τον db1 και μετά τον db2,
+  ώστε να βρίσκει τη βάση όπου είναι ανοιχτή.
+- **dbca χωρίς παράθυρο**: η CDB `BANK` με το PDB `BANKPDB`, AL32UTF8, αρχεία OMF στο `/u01/app/oracle/oradata`,
+  archive log, fast recovery area 30 GB, μνήμη 3 GB.
+  Το **dbca ζητά τους κωδικούς** του SYS, του SYSTEM και του διαχειριστή του PDB. Οι κωδικοί δεν γράφονται ποτέ σε αρχείο.
+  Βάλε έναν ισχυρό κωδικό, ίδιο και για τους τρεις, και **κράτα τον**. Θα χρειαστεί για τον standby και τον Broker.
+- **Ό,τι θέλει ο Data Guard**:
+  - `db_unique_name = BANK_DB1`;
+  - force logging και flashback;
+  - 4 standby redo logs (όσο μεγάλα είναι τα redo logs);
+  - `standby_file_management = AUTO`;
+  - ο Broker (`dg_broker_start`).
+- **Η βάση ξεκινά μαζί με το VM**, μέσα από την υπηρεσία systemd `oracle-bank` (`dbstart`/`dbshut`). Το PDB ανοίγει σε κάθε εκκίνηση.
+
+Στο τέλος δείχνει κάτι σαν:
+
+```
+NAME   DB_UNIQUE_NAME DATABASE_ROLE    OPEN_MODE    LOG_MODE     FOR FLASHBACK_ON
+BANK   BANK_DB1       PRIMARY          READ WRITE   ARCHIVELOG   YES YES
+BANKPDB  READ WRITE
+```
+
+Έλεγχος:
+
+```bash
+sudo su - oracle
+sqlplus system@BANKPDB
+```
+
+Αν βγει λάθος από το dbca, το log του είναι στο `/u01/app/oracle/cfgtoollogs/dbca/BANK/`.
+
+Επόμενο βήμα: το σχήμα `BANK` από το forms1 στη νέα βάση (Data Pump).
