@@ -252,6 +252,8 @@ sudo -iu oracle bash -c 'cd ~/bank/db && export NLS_LANG=GREEK_GREECE.AL32UTF8 &
 
 **Σε VM:** το Ollama (llama.cpp) τρέχει τον γρήγορο κώδικα AVX2 μόνο όταν ο επεξεργαστής έχει μαζί **AVX2, FMA και F16C**. Πολλά VM περνούν μόνο το AVX2, και τότε το Ollama πέφτει σε πιο αργό κώδικα, συνήθως 2–4 φορές. Το ελέγχεις με `grep -o -w 'avx2\|fma\|f16c' /proc/cpuinfo | sort -u`, που πρέπει να βγάλει και τα τρία. Αν όχι, βάλε στον hypervisor τον τύπο CPU σε «host» ή «host-passthrough» και σβήσε και άναψε το VM.
 
+Το **VirtualBox 7.0** κρύβει τα FMA και F16C από το VM ακόμα κι όταν ο host τα έχει. Στο `VBox.log` φαίνονται ως `FMA … = 0 (1)`: το πρώτο νούμερο είναι το VM, το δεύτερο ο host. Τα κόβει και μετά από `VBoxManage modifyvm … --cpuid-set`, και η κάρτα γραφικών του host δεν περνά στο VM. Στο forms1 (VirtualBox, 3 vCPU) μια απάντηση ήθελε 56 δευτερόλεπτα· με το Ollama στα Windows του ίδιου laptop θέλει 4 (§ παρακάτω).
+
 Ο βοηθός ζητά από το Ollama να κρατά το μοντέλο φορτωμένο 24 ώρες (`AI_LLM_KEEP_ALIVE`). Για να ισχύει και για άλλες χρήσεις του Ollama:
 
 ```bash
@@ -261,6 +263,64 @@ sudo systemctl edit ollama          # και γράψε:
 sudo systemctl restart ollama
 ```
 
+### Το Ollama σε άλλον υπολογιστή (π.χ. τα Windows του laptop, με κάρτα NVIDIA)
+
+Η βάση καλεί το Ollama μέσω HTTP, οπότε δεν χρειάζεται να τρέχει στον ίδιο υπολογιστή. Αν το VM τρέχει σε laptop ή PC με κάρτα NVIDIA, το Ollama στα **Windows του host**:
+- χρησιμοποιεί την κάρτα, ακόμα κι αν δεν χωρά όλο το μοντέλο σε αυτήν·
+- βλέπει όλο τον επεξεργαστή (όλους τους πυρήνες, με FMA και F16C)·
+- αφήνει στο VM 4–5 GB μνήμη για τη βάση και τον WebLogic.
+
+Στο forms1: Quadro M2200 με 4 GB. Το `gemma3:4b` (4,6 GB μαζί με το κομμάτι για εικόνες) μπαίνει κατά 61% στην κάρτα και κατά 39% στον επεξεργαστή, και μια απάντηση θέλει **4 δευτερόλεπτα**. Η πρώτη ερώτηση μετά από επανεκκίνηση του Ollama θέλει περίπου ένα λεπτό, όσο φορτώνει το μοντέλο.
+
+**1. Στα Windows** (PowerShell ως Administrator):
+
+```powershell
+nvidia-smi                                   # η κάρτα, η μνήμη της, ο driver
+setx OLLAMA_HOST "0.0.0.0:11434" /M          # να ακούει στο δίκτυο, όχι μόνο στο 127.0.0.1
+irm https://ollama.com/install.ps1 | iex     # ή OllamaSetup.exe από το https://ollama.com/download
+```
+
+Κλείσε το PowerShell και άνοιξε νέο, για να βρίσκει το `ollama`. Μετά:
+
+```powershell
+# το Ollama ξανά, με το OLLAMA_HOST (η εγκατάσταση το ξεκίνησε πριν από αυτό)
+Get-Process ollama* | Stop-Process -Force
+$env:OLLAMA_HOST = "0.0.0.0:11434"
+Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"
+netstat -ano | findstr 11434                 # 0.0.0.0:11434 LISTENING
+ollama pull gemma3:4b
+ollama run gemma3:4b "Πες μια καλημέρα στα ελληνικά."
+ollama ps                                    # PROCESSOR: π.χ. 39%/61% CPU/GPU
+ipconfig | findstr /i "IPv4"                 # η διεύθυνση των Windows στο δίκτυο του VM
+```
+
+Το Ollama δεν έχει κωδικό: το firewall δέχεται συνδέσεις **μόνο από το VM** (η διεύθυνσή του: `hostname -I` στο VM):
+
+```powershell
+New-NetFirewallRule -DisplayName "Ollama from forms1" -Direction Inbound -Protocol TCP -LocalPort 11434 -RemoteAddress <IP του VM> -Action Allow
+```
+
+**2. Στο VM:**
+
+```bash
+# φτάνει στο Ollama των Windows;
+curl -s http://<IP των Windows>:11434/api/tags | head -c 200; echo
+# η άδεια δικτύου της βάσης προς τα Windows (ζητά τον κωδικό του SYSTEM)
+sudo -iu oracle bash -c 'cd ~/bank/db && sqlplus system@localhost:1521/FREEPDB1 @GRANT_AI.sql /home/oracle/bank/ai/models /home/oracle/bank/docs <IP των Windows>'
+# ο βοηθός να το καλεί (ζητά τον κωδικό του bank)
+sudo -iu oracle bash -c 'cat > /tmp/llm_url.sql' <<'SQL'
+merge into bk_setting s using (select 'AI_LLM_URL' name, 'http://<IP των Windows>:11434/api/generate' value from dual) x
+on (s.name = x.name) when matched then update set s.value = x.value when not matched then insert (name, value) values (x.name, x.value);
+commit;
+exit
+SQL
+sudo -iu oracle bash -c 'export NLS_LANG=GREEK_GREECE.AL32UTF8 && sqlplus bank@localhost:1521/FREEPDB1 @/tmp/llm_url.sql'
+# το Ollama του VM δεν χρειάζεται πια
+sudo systemctl disable --now ollama
+```
+
+**3. Σταθερές διευθύνσεις.** Το `AI_LLM_URL`, το ACL της βάσης και ο κανόνας του firewall γράφουν διευθύνσεις. Στο router δώσε σε **Windows και VM πάντα την ίδια IPv4**, π.χ. στο FRITZ!Box: Home Network → Network → Network Connections → το μολύβι (Edit) της συσκευής → «Always assign this network device the same IPv4 address». Αν αλλάξει η διεύθυνση των Windows, ξανατρέχεις το `GRANT_AI.sql` με τη νέα και αλλάζεις το `AI_LLM_URL`.
+
 ### Λάθη
 
 | Κωδικός | Τι σημαίνει |
@@ -268,4 +328,5 @@ sudo systemctl restart ollama
 | `BK-176` | Κενή ερώτηση |
 | `ORA-24247` στο «λάθος» της ερώτησης | Λείπει το ACL προς το Ollama: `GRANT_AI.sql` |
 | `ORA-29273` / `ORA-12541` | Δεν τρέχει το Ollama (`systemctl status ollama`) ή άλλη διεύθυνση (`AI_LLM_URL`) |
+| `curl` από το VM δεν δείχνει τίποτα (Ollama στα Windows) | Το Ollama ακούει μόνο στο `127.0.0.1` (`netstat -ano \| findstr 11434`): ξανά με `OLLAMA_HOST=0.0.0.0:11434`· ή λείπει ο κανόνας του firewall |
 | `ORA-29276: transfer timeout` | Η απάντηση άργησε περισσότερο από `AI_LLM_TIMEOUT` (300 δευτερόλεπτα) |
