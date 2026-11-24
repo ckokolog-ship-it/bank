@@ -1,6 +1,7 @@
 #!/bin/bash
 # node.sh -- a new VM of Oracle Linux 9 (k8s/vms.ps1 made it) as a node of the cluster k3s, as root, on its console
-# (its address changes: an ssh to it drops):
+# (its address changes: an ssh to it drops; or first the fixed address on the console, then ssh to it, where the
+# token can be pasted):
 #
 #   sudo ./node.sh server 192.168.178.211                       the first one: the server of k3s (its token shown)
 #   sudo ./node.sh agent  192.168.178.212 192.168.178.211       the others: a worker, joined to the server (its
@@ -23,6 +24,11 @@ PREFIX=${BK_PREFIX:-24}
 K3S_VERSION=${K3S_VERSION:-v1.31.4+k3s1}
 die() { echo "== $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "as root: sudo $0 $*"
+# not forms1, nor any machine with the database or the forms: it would get a new name, a new address and k3s
+case $(hostname -s) in forms1*) die "this is $(hostname): node.sh is for the new VMs (k3s1, k3s2, k3s3) only" ;; esac
+if grep -qsv '^\s*\(#\|$\)' /etc/oratab || id oracle >/dev/null 2>&1; then
+  die "Oracle on this machine (/etc/oratab, the user oracle): node.sh is for the new VMs only"
+fi
 case $ROLE in
   server) ;;
   agent) [ -n "$SERVER" ] || die "agent: the address of the server too (sudo $0 agent $IP 192.168.178.211)" ;;
@@ -49,6 +55,11 @@ if systemctl is-active -q firewalld; then
   firewall-cmd -q --reload
 fi
 
+echo "== sudo finds /usr/local/bin (k3s, kubectl): Oracle Linux leaves it out of secure_path"
+printf 'Defaults secure_path = /sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin\n' > /etc/sudoers.d/local-bin
+chmod 440 /etc/sudoers.d/local-bin
+visudo -cq -f /etc/sudoers.d/local-bin || { rm -f /etc/sudoers.d/local-bin; die "sudoers (secure_path)"; }
+
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
   echo "== $SUDO_USER may import an image (k8s/ship_image.sh) without a password"
   printf '%s ALL=(root) NOPASSWD: /usr/local/bin/k3s ctr images import -\n' "$SUDO_USER" > /etc/sudoers.d/bk-k3s-import
@@ -64,7 +75,9 @@ if [ "$ROLE" = server ]; then
   cat /var/lib/rancher/k3s/server/node-token
   echo "== kubectl: sudo k3s kubectl get nodes -o wide"
 else
-  read -rsp "Το token του server ($SERVER: sudo cat /var/lib/rancher/k3s/server/node-token): " TOKEN; echo
+  # (the token of k3s: K10...::server:..., one line, from the server; not a key of ssh)
+  read -rsp "Το token του server ($SERVER: sudo cat /var/lib/rancher/k3s/server/node-token, K10...): " TOKEN; echo
+  case $TOKEN in K10*::server:*) ;; *) die "not a token of k3s (K10...::server:...): on $SERVER sudo cat /var/lib/rancher/k3s/server/node-token" ;; esac
   [ -n "$TOKEN" ] || die "no token"
   curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" K3S_URL="https://$SERVER:6443" K3S_TOKEN="$TOKEN" \
     INSTALL_K3S_EXEC="agent --node-ip=$IP" sh -

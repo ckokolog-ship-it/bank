@@ -60,6 +60,20 @@ def test_the_dockerfile():
     assert not [line for line in t.splitlines() if line.startswith('ENV') and 'PASSWORD' in line.upper()]
 
 
-@pytest.mark.parametrize('name', ['node.sh', 'ship_image.sh', 'deploy.sh'])
+@pytest.mark.parametrize('name', ['node.sh', 'ship_image.sh', 'deploy.sh', 'headlamp.sh'])
 def test_the_scripts(name):
     subprocess.run(['bash', '-n', os.path.join(K8S, name)], check=True)
+
+
+def test_the_lessons_of_the_first_install():
+    """what the first install on forms1 taught: node.sh not on forms1 or a machine with Oracle; sudo finds
+    /usr/local/bin; the token of k3s checked; k3s by its full path; the files sent as root (no scp of /home/oracle as
+    the user); the password of the VMs not printed (the output of unattended install not shown)"""
+    node = open(os.path.join(K8S, 'node.sh'), encoding='utf-8').read()
+    assert 'forms1*) die' in node and '/etc/oratab' in node
+    assert 'secure_path' in node and 'K10*::server:*' in node
+    assert '/usr/local/bin/k3s kubectl' in open(os.path.join(K8S, 'deploy.sh'), encoding='utf-8').read()
+    ship = open(os.path.join(K8S, 'ship_image.sh'), encoding='utf-8').read()
+    assert 'scp' not in ship.split('set -euo pipefail', 1)[1]
+    vms = open(os.path.join(K8S, 'vms.ps1'), encoding='utf-8').read()
+    assert '$out = & $vbox unattended install' in vms and 'usermod -aG wheel' in vms

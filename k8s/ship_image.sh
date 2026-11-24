@@ -45,6 +45,8 @@ for n in "${NODES[@]}"; do
   runuser -u "$U" -- ssh -o BatchMode=yes -o ConnectTimeout=10 "$n" 'sudo -n /usr/local/bin/k3s ctr images import -' < "$TAR" >/dev/null
 done
 echo "== k8s/bank.yaml, k8s/deploy.sh to ${NODES[0]}:bank-k8s/"
-runuser -u "$U" -- ssh -o BatchMode=yes "${NODES[0]}" 'mkdir -p bank-k8s'
-runuser -u "$U" -- scp -q "$HERE/bank.yaml" "$HERE/deploy.sh" "${NODES[0]}:bank-k8s/"
+# (read here as root: the user who runs ssh cannot read the home of the owner of the repo)
+runuser -u "$U" -- ssh -o BatchMode=yes "${NODES[0]}" 'mkdir -p bank-k8s && cat > bank-k8s/bank.yaml' < "$HERE/bank.yaml"
+runuser -u "$U" -- ssh -o BatchMode=yes "${NODES[0]}" 'cat > bank-k8s/deploy.sh && chmod +x bank-k8s/deploy.sh' < "$HERE/deploy.sh"
+runuser -u "$U" -- ssh -o BatchMode=yes "${NODES[0]}" 'cat > bank-k8s/headlamp.sh && chmod +x bank-k8s/headlamp.sh' < "$HERE/headlamp.sh"
 echo "== now on ${NODES[0]}:  sudo ~/bank-k8s/deploy.sh $TAG"
