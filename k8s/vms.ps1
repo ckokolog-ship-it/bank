@@ -5,6 +5,7 @@ forms1 (192.168.178.x). PowerShell, from the folder of this file:
 
   powershell -ExecutionPolicy Bypass -File .\vms.ps1 -Iso D:\iso\OracleLinux-R9-U5-x86_64-dvd.iso
   powershell -ExecutionPolicy Bypass -File .\vms.ps1 -Iso ... -Names k3s1,k3s2 -MemoryMB 6144
+  powershell -ExecutionPolicy Bypass -File .\vms.ps1 -Iso ... -Names db1,db2 -MemoryMB 8192 -Cpus 3 -DiskGB 100
 
 The password of the user (chris, with sudo) asked once, not shown; to VirtualBox in a temporary file, deleted at
 the end. The installation runs headless, some 10-15 minutes each; then on each VM, on its console:
@@ -20,9 +21,13 @@ param(
   [int]$DiskGB = 30
 )
 $ErrorActionPreference = 'Stop'
+# powershell -File gives -Names db1,db2 as one string 'db1,db2': split it; the ISO by its full path (VBoxManage)
+$Names = @($Names | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+foreach ($n in $Names) { if ($n -notmatch '^[A-Za-z0-9-]+$') { throw "a name of a VM: letters, digits, - only: $n" } }
 $vbox = Join-Path $env:ProgramFiles 'Oracle\VirtualBox\VBoxManage.exe'
 if (-not (Test-Path $vbox)) { throw "no VBoxManage: $vbox" }
 if (-not (Test-Path $Iso)) { throw "no ISO: $Iso" }
+$Iso = (Resolve-Path $Iso).Path
 function vb { & $vbox @args; if ($LASTEXITCODE -ne 0) { throw "VBoxManage $($args -join ' ')" } }
 
 $existing = & $vbox list vms

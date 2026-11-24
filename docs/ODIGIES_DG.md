@@ -24,12 +24,18 @@
 Με το ίδιο `k8s/vms.ps1` του cluster, με άλλες παραμέτρους. Η βάση θέλει περισσότερη μνήμη και δίσκο: 8 GB, 3 vCPU,
 100 GB (ο δίσκος του VirtualBox μεγαλώνει όσο γεμίζει, δεν πιάνει αμέσως 100 GB).
 
+Στον φάκελο όπου είναι το `vms.ps1` και το ISO των k3s (π.χ. `L:\Cluster Setup`), σε PowerShell:
+
 ```powershell
-cd C:\bank\k8s
-powershell -ExecutionPolicy Bypass -File .\vms.ps1 -Iso D:\iso\OracleLinux-R9-U5-x86_64-dvd.iso -Names db1,db2 -MemoryMB 8192 -Cpus 3 -DiskGB 100
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\vms.ps1 -Iso "L:\Cluster Setup\OracleLinux-R9-U8-x86_64-dvd.iso" -Names db1,db2 -MemoryMB 8192 -Cpus 3 -DiskGB 100
 ```
 
-Το ISO είναι το ίδιο με των k3s. Ο κωδικός του `chris` ζητείται μία φορά. Βάλε **καινούργιο** κωδικό, όχι αυτόν των
+Το ISO είναι το ίδιο με των k3s. Αν πάρεις το `vms.ps1` πριν από αυτή τη διόρθωση και το τρέξεις με `powershell -File`,
+το `db1,db2` γίνεται **ένα** VM με όνομα `db1,db2`. Το σβήνεις με
+`& "$env:ProgramFiles\Oracle\VirtualBox\VBoxManage.exe" unregistervm "db1,db2" --delete`.
+
+Ο κωδικός του `chris` ζητείται μία φορά. Βάλε **καινούργιο** κωδικό, όχι αυτόν των
 άλλων VMs. Η εγκατάσταση κάθε VM θέλει 10–15 λεπτά.
 
 ## 2. Σταθερή IP από την κονσόλα
@@ -49,7 +55,7 @@ ip -4 addr | grep 192.168
 Αν το `sudo` απαντήσει «chris is not in the sudoers file»: `su -` (ο κωδικός του root είναι ίδιος), μετά
 `usermod -aG wheel chris`, `exit`, και ξανά login.
 
-## 3. Το zip και τα scripts στα VMs (Windows)
+## 3. Το zip (Windows) και το script (forms1) στα VMs
 
 Το zip (περίπου 2 GB) είναι στο `L:\Oracle\Oracle 21\LINUX.X64_2326100_db_home.zip`. Πάει στο home του `chris`
 (όχι στο `/tmp`, γιατί μπορεί να είναι μικρό). Από το PowerShell των Windows (OpenSSH):
@@ -57,11 +63,15 @@ ip -4 addr | grep 192.168
 ```powershell
 scp "L:\Oracle\Oracle 21\LINUX.X64_2326100_db_home.zip" chris@192.168.178.221:
 scp "L:\Oracle\Oracle 21\LINUX.X64_2326100_db_home.zip" chris@192.168.178.222:
-scp C:\bank\dg\db_host.sh chris@192.168.178.221:
-scp C:\bank\dg\db_host.sh chris@192.168.178.222:
 ```
 
-(Αν το repo στα Windows δεν είναι στο `C:\bank`, άλλαξε τη διαδρομή. Πρώτα κάνε `git pull`.)
+Το `db_host.sh` πάει από το forms1, όπου είναι το repo (ως `oracle`):
+
+```bash
+cd ~/bank && git pull
+scp dg/db_host.sh chris@192.168.178.221:
+scp dg/db_host.sh chris@192.168.178.222:
+```
 
 ## 4. Το λογισμικό σε κάθε VM
 
