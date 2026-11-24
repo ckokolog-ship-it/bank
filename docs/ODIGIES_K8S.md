@@ -22,49 +22,98 @@
 | `k8s/ship_image.sh` | Χτίζει jar και εικόνα (podman), τη στέλνει στο containerd κάθε κόμβου, αντιγράφει τα αρχεία στον server | forms1 |
 | `k8s/bank.yaml` | Namespace, ConfigMap, Deployment, Service, Ingress, PodDisruptionBudget, HorizontalPodAutoscaler | — |
 | `k8s/deploy.sh` | Το Secret με τον κωδικό της βάσης (ζητείται), το `bank.yaml` με την εικόνα, αναμονή του rollout | k3s1 |
+| `k8s/headlamp.sh` | Η κονσόλα του Kubernetes στον browser (Headlamp) στο `/headlamp/`, με token διαχειριστή | k3s1 |
 
 Μνήμη: 3 × 4 GB = 12 GB. Με το forms1 (16 GB) και τα Windows με το Ollama μένουν περίπου 25 GB ελεύθερα στα 64 του laptop.
 
 ## 1. Τα VMs (Windows)
 
-Θέλεις το ISO του Oracle Linux 9 (DVD, π.χ. `OracleLinux-R9-U5-x86_64-dvd.iso`, το ίδιο που έστησε το forms1). Πάρε το `k8s/vms.ps1` από το GitHub (Raw) σε έναν φάκελο των Windows. Μετά, σε PowerShell:
+Θέλεις το ISO του Oracle Linux 9 (DVD, π.χ. `OracleLinux-R9-U8-x86_64-dvd.iso`). Το `k8s/vms.ps1` το παίρνεις από το GitHub (Raw), ή από το forms1 με το SFTP του MobaXterm. Ο φάκελος `/home/oracle` δεν ανοίγει για τον chris, οπότε το αντιγράφεις πρώτα στο home του:
+
+```bash
+sudo cp ~oracle/bank/k8s/vms.ps1 ~oracle/bank/k8s/node.sh ~chris/ && sudo chown chris: ~chris/vms.ps1 ~chris/node.sh
+```
+
+Βάλε το ISO και το `vms.ps1` στον ίδιο φάκελο, π.χ. `L:\Cluster Setup`. Σε PowerShell:
 
 ```powershell
+cd "L:\Cluster Setup"
 & "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list bridgedifs | findstr /b "Name:"   # το όνομα της κάρτας δικτύου
-powershell -ExecutionPolicy Bypass -File .\vms.ps1 -Iso D:\iso\OracleLinux-R9-U5-x86_64-dvd.iso
+powershell -ExecutionPolicy Bypass -File .\vms.ps1 -Iso "L:\Cluster Setup\OracleLinux-R9-U8-x86_64-dvd.iso"
 ```
 
-Ζητά τον κωδικό του χρήστη `chris` (και του root) των VMs μία φορά· δεν φαίνεται και δεν μένει σε αρχείο. Η εγκατάσταση τρέχει χωρίς παράθυρο, περίπου 10–15 λεπτά για κάθε VM· την παρακολουθείς από το VirtualBox Manager (Show). Αν η κάρτα δεν είναι η `ASUS 2.5G Ethernet USB Adapter`, δώσε `-Adapter "<όνομα>"`.
+- **Ο κωδικός:** ζητείται μία φορά, για τον χρήστη `chris` και τον root. Δεν φαίνεται, και το script δεν τυπώνει την έξοδο του VirtualBox.
+- **Η εγκατάσταση:** τρέχει χωρίς παράθυρο και στα τρία μαζί, περίπου 10–15 λεπτά. Την παρακολουθείς από το VirtualBox Manager (Show).
+- **Η κάρτα δικτύου:** αν δεν είναι η `ASUS 2.5G Ethernet USB Adapter`, δώσε `-Adapter "<όνομα>"`.
+- **Ο δίσκος με το ISO:** αν είναι εξωτερικός (π.χ. `L:`), μην τον βγάλεις μέχρι να τελειώσει η εγκατάσταση.
 
-## 2. Κάθε VM γίνεται κόμβος (στην κονσόλα του)
+Μετά την εγκατάσταση, σε κάθε VM άλλαξε τους κωδικούς: `passwd` και `sudo passwd root`. Το VirtualBox γράφει τον αρχικό κωδικό καθαρό στο `ks.cfg` της εγκατάστασης. Με τα VMs **σβηστά**, σβήσε και τα βοηθητικά αρχεία της:
 
-Στο VirtualBox Manager → το VM → Show, σύνδεση ως `chris`. Το VM παίρνει πρώτα διεύθυνση από το router· τη βλέπεις με `ip -4 a`. Από το forms1 στείλε του το `node.sh`:
+```powershell
+foreach ($n in "k3s1","k3s2","k3s3") {
+  & "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" storageattach $n --storagectl IDE --port 1 --device 0 --medium emptydrive
+  Remove-Item "$env:USERPROFILE\VirtualBox VMs\$n\Unattended-*" -Force -ErrorAction SilentlyContinue
+}
+```
+
+## 2. Κάθε VM γίνεται κόμβος
+
+**Πρώτα ο k3s1 (server), μετά οι k3s2 και k3s3 (workers).** Κάθε φορά δες στο prompt σε ποιο μηχάνημα είσαι (`[chris@k3s1 ~]$`). Το `node.sh` αρνείται να τρέξει στο forms1 ή σε μηχάνημα με Oracle, αλλά κάλλιο να το βλέπεις κι εσύ.
+
+**α. Στην κονσόλα του VM** (VirtualBox Manager → Show), σύνδεση ως `chris`:
 
 ```bash
-scp ~oracle/bank/k8s/node.sh chris@<προσωρινή IP του VM>:
+id                     # να φαίνεται 10(wheel): ο chris έχει sudo
+ip -4 a | grep inet    # η προσωρινή διεύθυνση (DHCP), π.χ. 192.168.178.145
 ```
 
-Μετά, **στην κονσόλα** του VM. Η διεύθυνσή του αλλάζει, οπότε μια σύνδεση ssh θα κοβόταν.
+Αν το `id` δεν δείχνει `wheel` (το `sudo` γράφει «chris is not in the sudoers file»):
 
 ```bash
-# k3s1: ο server (δείχνει στο τέλος το token)
-sudo ./node.sh server 192.168.178.211
-# k3s2, k3s3: workers (ζητούν το token του server)
-sudo ./node.sh agent 192.168.178.212 192.168.178.211
-sudo ./node.sh agent 192.168.178.213 192.168.178.211
+su -                   # ο κωδικός του root (με παύλα: su -, όχι su ~)
+usermod -aG wheel chris
+exit
+exit                   # αποσύνδεση, και ξανά login ως chris
 ```
 
-Το token το ξαναβλέπεις στον server με `sudo cat /var/lib/rancher/k3s/server/node-token`. Στο τέλος, στο k3s1:
+**β. Η σταθερή διεύθυνση, πριν από το ssh.** Με την προσωρινή διεύθυνση, η σύνδεση ssh κόβεται τη στιγμή που αλλάζει. Δώσ' την λοιπόν από την κονσόλα, π.χ. για τον k3s3:
+
+```bash
+sudo nmcli con mod enp0s3 ipv4.method manual ipv4.addresses 192.168.178.213/24 ipv4.gateway 192.168.178.1 ipv4.dns 192.168.178.1
+sudo nmcli con up enp0s3
+```
+
+**γ. Ssh από το MobaXterm** στη σταθερή διεύθυνση (εκεί δουλεύει η επικόλληση) και:
+
+```bash
+scp chris@192.168.178.200:node.sh .         # από το forms1 (ο κωδικός του chris στο forms1)
+chmod +x node.sh
+sudo ./node.sh server 192.168.178.211                    # στον k3s1
+sudo ./node.sh agent 192.168.178.212 192.168.178.211     # στον k3s2
+sudo ./node.sh agent 192.168.178.213 192.168.178.211     # στον k3s3
+```
+
+**Το token** που ζητούν οι workers είναι το token του k3s, **όχι** κάποιο κλειδί ssh. Είναι μία γραμμή της μορφής `K10…::server:…`, και τη βλέπεις στον k3s1:
+
+```bash
+sudo cat /var/lib/rancher/k3s/server/node-token
+```
+
+Στο MobaXterm, με διπλό κλικ πάνω στο token αντιγράφεται όλο, και με δεξί κλικ γίνεται επικόλληση (δεν φαίνεται), και μετά Enter. Αν δοθεί λάθος token, το `node.sh` το καταλαβαίνει από τη μορφή του και σταματά.
+
+Στο τέλος, στον k3s1:
 
 ```bash
 sudo k3s kubectl get nodes -o wide      # 3 κόμβοι Ready
 ```
 
+Το `node.sh` βάζει στο sudo και το `/usr/local/bin`, οπότε το `sudo k3s …` βρίσκει το k3s. Χωρίς αυτό, στο Oracle Linux βγαίνει «sudo: k3s: command not found».
+
 Οι διευθύνσεις .211–.213 είναι έξω από το εύρος DHCP του FRITZ!Box (εξ ορισμού .20–.200). Για σιγουριά, κράτησέ τες και εκεί: Home Network → Network → Network Connections → το μολύβι (Edit) → «Always assign this network device the same IPv4 address».
 
 ## 3. Η εικόνα (forms1)
 
-Μία φορά: η βάση να δέχεται συνδέσεις από τους κόμβους (μόνο από αυτούς), και κλειδιά ssh προς αυτούς:
+Μία φορά: η βάση να δέχεται συνδέσεις από τους κόμβους, και κλειδιά ssh προς αυτούς. Αν το firewalld του forms1 δεν τρέχει («FirewallD is not running»), η θύρα 1521 είναι ήδη ανοιχτή και το πρώτο κομμάτι δεν χρειάζεται.
 
 ```bash
 for ip in 192.168.178.211 192.168.178.212 192.168.178.213; do
@@ -73,20 +122,29 @@ done
 sudo firewall-cmd --reload
 [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
 for ip in 192.168.178.211 192.168.178.212 192.168.178.213; do ssh-copy-id chris@$ip; done
+# έλεγχος: όνομα και import-ok από κάθε κόμβο, χωρίς κωδικό
+for ip in 192.168.178.211 192.168.178.212 192.168.178.213; do ssh -o BatchMode=yes chris@$ip 'hostname; sudo -n /usr/local/bin/k3s ctr version >/dev/null && echo import-ok'; done
 ```
 
-Κάθε φορά που αλλάζει ο κώδικας (μετά από ένα `git pull`):
+Κάθε φορά που αλλάζει ο κώδικας:
 
 ```bash
+sudo -iu oracle git -C bank pull
 sudo ~oracle/bank/k8s/ship_image.sh
 ```
 
-Χτίζει το jar και την εικόνα `localhost/bank/bk-api:<commit>`, και τη στέλνει σε κάθε κόμβο. Δεν χρειάζεται registry: γίνεται με ssh και `k3s ctr images import`. Στο τέλος γράφει την εντολή για το επόμενο βήμα.
+Τι κάνει το `ship_image.sh`:
+- χτίζει το jar και την εικόνα `localhost/bank/bk-api:<commit>`· την πρώτη φορά εγκαθιστά το podman και κατεβάζει τη Java 21·
+- στέλνει την εικόνα σε κάθε κόμβο (ssh και `k3s ctr images import`, χωρίς registry)·
+- αντιγράφει τα `bank.yaml`, `deploy.sh` και `headlamp.sh` στον k3s1, στο `~/bank-k8s/`·
+- στο τέλος γράφει την εντολή για το επόμενο βήμα.
 
 ## 4. Το deploy (k3s1)
 
+**Στον k3s1** (ssh chris@192.168.178.211, το prompt γράφει `[chris@k3s1 ~]$`):
+
 ```bash
-sudo ~/bank-k8s/deploy.sh <commit>          # την πρώτη φορά ζητά τον κωδικό του χρήστη BANK της βάσης
+sudo ~/bank-k8s/deploy.sh <commit>          # την πρώτη φορά ζητά τον κωδικό του χρήστη BANK της βάσης, δύο φορές
 sudo ~/bank-k8s/deploy.sh --status          # τα pods (σε ποιον κόμβο), service, ingress, autoscaler
 ```
 
@@ -139,3 +197,91 @@ $K get pods -o wide                         # 2 pods, σε διαφορετικ�
 | `404 page not found` από το Traefik | Λάθος διαδρομή· οι σελίδες είναι στο `/web/`, το ATM στο `/atm/` |
 | Κόμβος `NotReady` | `sudo systemctl status k3s` (server) ή `k3s-agent` (worker)· firewalld: θύρες 6443, 10250, 8472/udp |
 | Το ATM «ξεχνά» την κάρτα | Ο browser δεν κράτησε το cookie `bk_node` (π.χ. ιδιωτικό παράθυρο που κλείνει) |
+| «chris is not in the sudoers file» | Ο chris δεν είναι στο `wheel`: `su -`, `usermod -aG wheel chris`, ξανά login (§2) |
+| «sudo: k3s: command not found» | Το sudo δεν βλέπει το `/usr/local/bin`: `sudo /usr/local/bin/k3s …`, ή ξανά το `node.sh`, που το διορθώνει |
+| Ο worker κολλά στο «Starting k3s-agent» | Λάθος token (π.χ. κλειδί ssh αντί για το `K10…` του k3s1): Ctrl+C, και ξανά το `node.sh` με το σωστό |
+| «scp: … /home/oracle/…: Permission denied» | Ο chris δεν διαβάζει το home του oracle: `sudo cp … ~chris/` πρώτα (§1) |
+| Η σύνδεση ssh κόβεται στο «a fixed address» | Το `node.sh` άλλαξε τη διεύθυνση: ssh στη νέα και ξανά το `node.sh` (§2β) |
+| Το `node.sh` έτρεξε σε λάθος μηχάνημα | `sudo /usr/local/bin/k3s-uninstall.sh` (ή `k3s-agent-uninstall.sh`), και το όνομα και η διεύθυνσή του πίσω με `hostnamectl` και `nmcli` |
+
+## 8. Διαχείριση: πώς βλέπεις το cluster
+
+### kubectl (στον k3s1)
+
+Μία φορά, ένα σύντομο όνομα:
+
+```bash
+echo "alias k='sudo k3s kubectl'" >> ~/.bashrc && source ~/.bashrc
+```
+
+| Τι θέλεις να δεις | Εντολή |
+|---|---|
+| Οι κόμβοι και η κατάστασή τους | `k get nodes -o wide` |
+| Όλα τα pods (και του συστήματος) | `k get pods -A -o wide` |
+| Το bank: pods, service, ingress, autoscaler | `k -n bank get all,ingress,hpa,pdb` |
+| Ζωντανά | `k -n bank get pods -o wide -w` (Ctrl+C για έξοδο) |
+| Γιατί ένα pod δεν ξεκινά | `k -n bank describe pod <όνομα>` (τα Events στο τέλος) |
+| Logs της εφαρμογής | `k -n bank logs deploy/bk-api -f` |
+| CPU και μνήμη | `k top nodes`, `k -n bank top pods` |
+| Τα γεγονότα του cluster | `k get events -A --sort-by=.lastTimestamp \| tail -20` |
+| Οι εκδόσεις | `k -n bank rollout history deploy/bk-api` |
+
+### k9s: το cluster ζωντανά στο τερματικό
+
+```bash
+curl -sL https://github.com/derailed/k9s/releases/latest/download/k9s_Linux_amd64.tar.gz | tar xz k9s
+sudo mv k9s /usr/local/bin/
+sudo k9s --kubeconfig /etc/rancher/k3s/k3s.yaml -n bank
+```
+
+Μέσα στο k9s:
+- **Προβολή:** `:pods`, `:nodes`, `:deploy`, `:svc`, `:events`, `:pods bank`· το `0` δείχνει όλα τα namespaces.
+- **Σε ένα pod:** `l` για logs, `d` για describe, `s` για shell μέσα στο container, `Ctrl+D` για διαγραφή (το Kubernetes το ξαναφτιάχνει)· `Esc` για πίσω.
+- **Βοήθεια και έξοδος:** `?` για βοήθεια, `:q` (ή Ctrl+C) για έξοδο.
+
+Αν δεις άδεια λίστα με τίτλο `pods(default)[0]`, είσαι στο namespace `default`: πάτα `0`, ή γράψε `:pods bank`.
+
+### Headlamp: η κονσόλα του Kubernetes στον browser
+
+Στον k3s1, μία φορά (το `ship_image.sh` το έχει φέρει στο `~/bank-k8s/`):
+
+```bash
+sudo ~/bank-k8s/headlamp.sh
+```
+
+Τι κάνει:
+- στήνει το Headlamp (kubernetes-sigs) στο `kube-system`, στη διαδρομή `/headlamp`·
+- φτιάχνει ένα Ingress για αυτή τη διαδρομή· το bank μένει στο `/`·
+- φτιάχνει τον λογαριασμό `headlamp-admin` και τυπώνει ένα **token 8 ωρών**.
+
+Άνοιξε το **http://192.168.178.211/headlamp/**, με την κάθετο στο τέλος, και βάλε το token. Βλέπεις:
+- κόμβους, pods, deployments·
+- logs και events·
+- γραφήματα CPU και μνήμης.
+
+Και κάνεις από εκεί:
+- επανεκκίνηση και διαγραφή pods·
+- scale·
+- επεξεργασία YAML.
+
+```bash
+sudo ~/bank-k8s/headlamp.sh --token     # νέο token (το προηγούμενο έληξε)
+sudo ~/bank-k8s/headlamp.sh --remove    # όλο το Headlamp έξω
+```
+
+⚠️ Το token δίνει **πλήρη έλεγχο** του cluster, και η σελίδα είναι σε απλό HTTP. Είναι μόνο για το τοπικό δίκτυο: ποτέ στο internet, και το token σε κανέναν.
+
+### Headlamp ως εφαρμογή των Windows
+
+Η ίδια κονσόλα, χωρίς τίποτα μέσα στο cluster: headlamp.dev (ή `winget install Headlamp.Headlamp`). Θέλει το **kubeconfig**:
+
+```bash
+# στον k3s1
+sudo cat /etc/rancher/k3s/k3s.yaml | sed 's#https://127.0.0.1:6443#https://192.168.178.211:6443#' > ~/k3s-bank.yaml
+```
+
+1. Κατέβασέ το με το SFTP του MobaXterm στο `C:\Users\<χρήστης>\.kube\config`.
+2. Σβήσε το αντίγραφο στον k3s1: `rm ~/k3s-bank.yaml`.
+3. Άνοιξε το Headlamp.
+
+⚠️ Το kubeconfig είναι το κλειδί διαχειριστή του cluster: μόνο στα Windows σου.

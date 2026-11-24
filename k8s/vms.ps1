@@ -48,10 +48,17 @@ try {
     vb storagectl $n --name SATA --add sata --controller IntelAhci --portcount 1
     vb storageattach $n --storagectl SATA --port 0 --device 0 --type hdd --medium $vdi
     vb storagectl $n --name IDE --add ide
-    vb unattended install $n --iso=$Iso --user=$User --password-file=$pwFile --full-user-name=$User `
-       --hostname="$n.home.lan" --locale=en_US --country=GR --time-zone=Europe/Athens --start-vm=headless
+    # (its output not shown: VBoxManage prints the password in it; chris in wheel: sudo)
+    $out = & $vbox unattended install $n --iso=$Iso --user=$User --password-file=$pwFile --full-user-name=$User `
+       --hostname="$n.home.lan" --locale=en_US --country=GR --time-zone=Europe/Athens `
+       --post-install-command="usermod -aG wheel $User" --start-vm=headless 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "VBoxManage unattended install $n (exit $LASTEXITCODE)" }
+    Remove-Variable out
+    Write-Host "   installing (headless)"
   }
 } finally {
   Remove-Item $pwFile -Force -ErrorAction SilentlyContinue
 }
 Write-Host "== the VMs install themselves (VirtualBox Manager: their console). Then on each one: k8s/node.sh"
+Write-Host "== after: on each VM passwd (chris) and sudo passwd root; the VMs off, their Unattended-* files away:"
+Write-Host "   docs/ODIGIES_K8S.md, 1"

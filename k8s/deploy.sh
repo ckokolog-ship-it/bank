@@ -12,8 +12,9 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 DB_URL=${BK_DB_URL:-jdbc:oracle:thin:@//192.168.178.200:1521/FREEPDB1}
-K="k3s kubectl"
-command -v kubectl >/dev/null && K=kubectl
+# (k3s by its full path: sudo on Oracle Linux does not look in /usr/local/bin)
+K="/usr/local/bin/k3s kubectl"
+[ -x /usr/local/bin/k3s ] || K=kubectl
 die() { echo "== $*" >&2; exit 1; }
 status() {
   $K -n bank get pods -o wide
