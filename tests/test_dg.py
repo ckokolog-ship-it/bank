@@ -56,3 +56,14 @@ def test_primary():
     for want in ('force logging', 'flashback on', 'add standby logfile', 'standby_file_management = AUTO',
                  'dg_broker_start = TRUE', "db_unique_name='%s'", 'BANK_DB1_DGMGRL', 'oracle-bank'):
         assert want in s or want.replace('BANK_DB1', '${UNIQUE}') in s, want
+
+
+def test_export_and_import():
+    e, i = text('export.sh'), text('import.sh')
+    assert 'forms1*) ;;' in e and 'expdp' in e and 'schemas=BANK' in e and 'flashback_time' in e
+    assert 'db1) ;;' in i and 'impdp' in i and 'PRIMARY' in i
+    # what Data Pump does not carry: the grant of SYS, the directories, the ACL
+    for want in ('dbms_crypto', 'bk_models', 'bk_docs', 'append_host_ace', 'compile_schema'):
+        assert want in i, want
+    # never a password on the command line (expdp, impdp ask)
+    assert not re.search(r'(?i)(system|bank)/\S', e + i)

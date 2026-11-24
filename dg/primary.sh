@@ -67,7 +67,8 @@ else
     -memoryMgmtType AUTO_SGA -totalMemory $MEM_MB -redoLogFileSize 200 \
     -emConfiguration NONE" || die "dbca failed (its log: $ORACLE_BASE/cfgtoollogs/dbca/$SID/)"
 fi
-pgrep -x "ora_pmon_$SID" >/dev/null || echo "startup" | sqlsys
+# (26ai: db_pmon_BANK; before: ora_pmon_BANK)
+pgrep -x "(ora|db)_pmon_$SID" >/dev/null || echo "startup" | sqlsys
 
 echo "== Data Guard: db_unique_name $UNIQUE, force logging, flashback, standby redo logs, the broker"
 CUR=$(printf 'set heading off feedback off pages 0\nselect value from v$parameter where name = %s;\n' "'db_unique_name'" | sqlsys | tr -d '[:space:]')
