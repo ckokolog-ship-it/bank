@@ -45,3 +45,14 @@ def test_vms_ps1_splits_the_names():
     with open(os.path.join(DG, '..', 'k8s', 'vms.ps1'), encoding='utf-8') as f:
         s = f.read()
     assert "-split ','" in s and 'Resolve-Path $Iso' in s
+
+
+def test_primary():
+    s = text('primary.sh')
+    assert re.search(r'db1\) ;;', s) and 'die "as root' in s
+    assert '-createAsContainerDatabase true' in s and '-pdbName BANKPDB' in s and '-enableArchive true' in s
+    # the passwords: asked by dbca, never on its command line
+    assert not re.search(r'-(sys|system|pdbAdmin)Password', s)
+    for want in ('force logging', 'flashback on', 'add standby logfile', 'standby_file_management = AUTO',
+                 'dg_broker_start = TRUE', "db_unique_name='%s'", 'BANK_DB1_DGMGRL', 'oracle-bank'):
+        assert want in s or want.replace('BANK_DB1', '${UNIQUE}') in s, want
