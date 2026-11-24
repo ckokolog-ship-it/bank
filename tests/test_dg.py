@@ -67,3 +67,13 @@ def test_export_and_import():
         assert want in i, want
     # never a password on the command line (expdp, impdp ask)
     assert not re.search(r'(?i)(system|bank)/\S', e + i)
+
+
+def test_standby_and_broker():
+    s, b = text('standby.sh'), text('broker.sh')
+    assert 'db2) ;;' in s and 'for standby from active database' in s and "db_unique_name = '$UNIQUE'" in s
+    assert 'orapw$SID' in s and 'BANK_DB2_DGMGRL' in s.replace('${UNIQUE}', 'BANK_DB2')
+    # RMAN asks the passwords: never on its command line
+    assert 'rman target sys@BANK_DB1 auxiliary sys@BANK_DB2 ' in s and not re.search(r'sys/\S', s)
+    assert 'db1) ;;' in b and 'create configuration bank' in b and 'enable configuration' in b
+    assert 'dgmgrl -silent /' in b
