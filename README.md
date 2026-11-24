@@ -67,6 +67,7 @@ sudo ~oracle/bank/api/install_service.sh --add-user admin ADMIN "Όνομα Επ
 
 | Έγγραφο | Τι έχει |
 |---|---|
+| [docs/ODIGIES_DG.md](docs/ODIGIES_DG.md) | Η βάση σε Oracle 26ai Enterprise με Data Guard: τα VMs db1 και db2, το λογισμικό (και τα επόμενα βήματα: primary, standby, Fast-Start Failover) |
 | [docs/ODIGIES_K8S.md](docs/ODIGIES_K8S.md) | Το bank σε cluster k3s: τα VMs, οι κόμβοι, η εικόνα, το deploy, οι δοκιμές (νέα έκδοση, πτώση κόμβου, συντήρηση, autoscaler), πώς είναι φτιαγμένο |
 | [docs/ODIGIES_AI.md](docs/ODIGIES_AI.md) | Το AI της Oracle: βοηθός ταμία (RAG, τοπικό LLM), αναζήτηση με το νόημα (AI Vector Search, το μοντέλο embeddings, οι κατηγορίες) και ύποπτες κινήσεις (Oracle Machine Learning): το μοντέλο, τα χαρακτηριστικά μιας κίνησης, το όριο, η σάρωση, οι ειδοποιήσεις, το demo, το δικαίωμα `CREATE MINING MODEL` |
 | [docs/ODIGIES_ATM.md](docs/ODIGIES_ATM.md) | Το ATM (`/atm/`) και οι χρεωστικές κάρτες: δοκιμή σε 1 λεπτό, οι συναλλαγές, το PIN, τα λάθη `BK-133` ως `BK-139` |
