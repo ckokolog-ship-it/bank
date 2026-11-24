@@ -1,0 +1,173 @@
+# bank.yaml -- the REST service and the pages of the bank (bk-api) in the cluster k3s: k8s/deploy.sh applies it
+# (@IMAGE@ and @DB_URL@ put in by it; the password of the database: the Secret bk-db, made by it, never here).
+#
+#   Namespace bank
+#   ConfigMap bk-api      the database (BK_DB_URL, BK_DB_USER) and the port
+#   Deployment bk-api     2 replicas on different nodes; a new version one pod at a time, never less than 2 ready
+#                         (maxUnavailable 0); ready when /api/health answers (the service and its database); alive
+#                         while its port answers (the database down: not ready, not restarted)
+#   Service bk-api        the replicas behind one address; sticky (a cookie of Traefik): the session of a card at an
+#                         ATM is in the memory of its replica (Atm.java), so an ATM stays on it
+#   Ingress bk-api        Traefik (of k3s) on port 80 of every node: /web/, /atm/, /api/
+#   PodDisruptionBudget   a node drained (kubectl drain): at least 1 replica up all the time
+#   HorizontalPodAutoscaler   2 to 4 replicas by CPU (70%; metrics-server of k3s)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bank
+  labels:
+    app.kubernetes.io/part-of: bank
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bk-api
+  namespace: bank
+data:
+  BK_DB_URL: "@DB_URL@"
+  BK_DB_USER: "bank"
+  BK_API_BIND: "0.0.0.0"
+  BK_API_PORT: "8091"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bk-api
+  namespace: bank
+  labels:
+    app: bk-api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: bk-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: bk-api
+    spec:
+      # the replicas on different nodes when there are (a node down: the other one serves)
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: bk-api
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: bk-api
+          image: "@IMAGE@"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8091
+          envFrom:
+            - configMapRef:
+                name: bk-api
+            - secretRef:
+                name: bk-db
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bk-api
+  namespace: bank
+  annotations:
+    # an ATM stays on one replica: its session of a card is in the memory of that one
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.name: bk_node
+    traefik.ingress.kubernetes.io/service.sticky.cookie.httponly: "true"
+spec:
+  selector:
+    app: bk-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bk-api
+  namespace: bank
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bk-api
+                port:
+                  name: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bk-api
+  namespace: bank
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: bk-api
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bk-api
+  namespace: bank
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bk-api
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
