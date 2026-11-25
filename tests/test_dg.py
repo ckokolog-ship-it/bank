@@ -103,3 +103,11 @@ def test_observer_check_reads_all():
     # grep -q in a pipe with pipefail: a connection that worked counted as failed
     o = text('observer.sh')
     assert 'tee /dev/stderr | grep -q' not in o and 'grep -qi "bank_db2" <<<"$OUT"' in o
+
+
+def test_the_listener_starts_with_the_database():
+    # after a power off of db1 the database came up, its listener not: the reinstate could not reach it
+    for f in ('primary.sh', 'standby.sh', 'oracle_unit.sh'):
+        s = text(f)
+        assert 'ExecStartPre=-$ORACLE_HOME/bin/lsnrctl start' in s, f
+        assert s.index('ExecStartPre=-') < s.index('ExecStart=$ORACLE_HOME/bin/dbstart'), f

@@ -378,10 +378,29 @@ show configuration;
 Πρέπει να δεις τον `bank_db2` ως **Primary**, και τον `BANK_DB1` να χρειάζεται reinstate. Ξεκίνα πάλι τον db1. Σε λίγα
 λεπτά γίνεται **standby** μόνος του. Το log του observer: `tail -f /home/oracle/dg/observer.log`.
 
+Αν το reinstate δεν γίνεται και ο observer γράφει `ORA-12541: ... No listener`, ο listener του db1 δεν ξεκίνησε μαζί
+με το VM. Ξεκίνα τον στον db1 (ως oracle) με `lsnrctl start`. Αν χρειαστεί, κάνε το reinstate από το forms1:
+`export TNS_ADMIN=/home/oracle/dg`, `dgmgrl /@BANK_DB2` (χωρίς κενό ανάμεσα στο `/` και στο `@`) και
+`reinstate database BANK_DB1;`.
+
+Μια φορά, στον db1 και στον db2, ώστε ο listener να ξεκινά πάντα μαζί με τη βάση. Τα VMs που φτιάχτηκαν πριν από αυτό
+χρειάζονται αυτό το βήμα. Από το forms1 (ως oracle):
+
+```bash
+cd ~/bank && git pull
+scp dg/oracle_unit.sh chris@192.168.178.221:
+scp dg/oracle_unit.sh chris@192.168.178.222:
+```
+
+και σε κάθε VM: `sudo bash ~/oracle_unit.sh`.
+
 Για επιστροφή στην αρχική κατάσταση, χωρίς απώλεια:
 
 ```
 switchover to BANK_DB1;
 ```
+
+Το switchover γίνεται από το forms1, με `dgmgrl /@BANK_DB2`. Θέλει σύνδεση με κωδικό (το wallet), γιατί ο Broker
+επανεκκινεί τις βάσεις. Με το `dgmgrl /` στον db2 δεν μπορεί.
 
 Επόμενο βήμα: οι εφαρμογές στη νέα βάση (k3s, φόρμες, reports).
