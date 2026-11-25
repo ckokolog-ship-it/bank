@@ -451,4 +451,84 @@ select database_role from v$database;      -- PHYSICAL STANDBY
 insert into bk_setting values (null, null); -- ORA-16000: η βάση είναι ανοιχτή μόνο για ανάγνωση
 ```
 
-Επόμενο βήμα: οι εφαρμογές στη νέα βάση (k3s, φόρμες, reports).
+## 12. Οι εφαρμογές στη νέα βάση
+
+Όλες οι εφαρμογές που γράφουν συνδέονται στη **`bank_rw`**, με τον db1 και τον db2 στη σειρά. Απαντά όποιος είναι primary.
+Μετά από failover, οι νέες συνδέσεις περιμένουν (`RETRY_COUNT`) και βρίσκουν τον db2 μόνες τους.
+
+| Εφαρμογή | Πώς συνδέεται | Τι αλλάζει |
+|----------|---------------|------------|
+| bk-api στο k3s (web, ATM, REST) | `BK_DB_URL` του ConfigMap | το `deploy.sh` έχει πλέον ως προεπιλογή τη `bank_rw` |
+| φόρμες και reports (forms1) | το όνομα `BK_DB` του wallet του domain | το `dg/apps_forms.sh` αλλάζει την εγγραφή `BK_DB` στο `tnsnames.ora` του domain |
+| το παλιό bk-api (systemd) στο forms1 | `localhost/FREEPDB1` | σταματά: το web τρέχει πλέον στο k3s |
+| mini market (`MM_DB`) | Free του forms1 | τίποτα: μένει στην Free |
+
+Ο κωδικός του `BANK` είναι ο ίδιος, γιατί ήρθε με το Data Pump. Γι' αυτό το wallet και το Secret του k3s δεν αλλάζουν.
+
+**Η σειρά.** Για 10–15 λεπτά η τράπεζα είναι εκτός λειτουργίας, γιατί κατά το τελευταίο αντίγραφο δεν πρέπει να γράφει κανείς στην Free.
+
+**1. Σταματούν οι εφαρμογές.**
+
+Στον **k3s1** (chris):
+```bash
+sudo /usr/local/bin/k3s kubectl -n bank get deploy bk-api -o jsonpath='{..image}'; echo
+sudo /usr/local/bin/k3s kubectl -n bank scale deploy bk-api --replicas=0
+```
+Το πρώτο δείχνει την εικόνα, π.χ. `localhost/bank/bk-api:072399c`. **Κράτα το tag** μετά το `:`, γιατί θα χρειαστεί στο βήμα 5.
+
+Στο **forms1** (chris):
+```bash
+sudo systemctl disable --now bk-api
+sudo systemctl stop weblogic-forms
+```
+Το `weblogic-forms` σταματά και τις φόρμες του mini market για λίγα λεπτά.
+
+**2. Το τελευταίο αντίγραφο.**
+
+Στο **forms1** (oracle):
+```bash
+cd ~/bank && git pull
+bash dg/export.sh
+```
+
+Στον **db1** (chris):
+```bash
+sudo bash ~/import.sh
+```
+Απάντησε `yes` στο «drop it and import again». Ο db2 τα παίρνει μόνος του, μέσω του redo.
+
+**3. Οι φόρμες και τα reports.** Στο **forms1** (oracle):
+```bash
+bash dg/apps_forms.sh
+```
+Στο τέλος πρέπει να δείξει `db1 PRIMARY 97` (host, ρόλος, λογαριασμοί).
+
+**4.** Στο **forms1** (chris):
+```bash
+sudo systemctl start weblogic-forms
+```
+
+**5. Το bk-api στο k3s.** Πρώτα στέλνεις το νέο `deploy.sh` στον k3s1. Στο **forms1** (oracle):
+```bash
+scp k8s/deploy.sh chris@192.168.178.211:bank-k8s/
+```
+
+Μετά, στον **k3s1** (chris), με το tag από το βήμα 1:
+```bash
+sudo ~/bank-k8s/deploy.sh <tag>
+```
+Το `apply` ξαναφέρνει τα 2 pods με τη νέα σύνδεση.
+
+**6. Έλεγχος.**
+- Το web στο http://192.168.178.211/web/ και το ATM.
+- Οι φόρμες, από το URL του forms1.
+- Ότι γράφουν στον db1: μια κίνηση από το web, και μετά στον **db2** (`bank_ro`) η ίδια κίνηση πρέπει να φαίνεται αμέσως.
+
+**Επιστροφή στην Free**, αν κάτι δεν πάει καλά:
+1. Στο forms1, πάρε πίσω το `tnsnames.ora.<ημερομηνία>.bak` του domain και κάνε restart το `weblogic-forms`.
+2. Στον k3s1:
+   ```bash
+   sudo BK_DB_URL=jdbc:oracle:thin:@//192.168.178.200:1521/FREEPDB1 ~/bank-k8s/deploy.sh <tag>
+   ```
+
+Επόμενο βήμα: δοκιμή failover με τις εφαρμογές ανοιχτές.
