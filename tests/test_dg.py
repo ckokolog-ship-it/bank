@@ -138,3 +138,28 @@ def test_local_listener_by_address():
     assert "(HOST=db1.home.lan)(PORT=1521))'' scope = both" in text('primary.sh')
     s = text('standby.sh')
     assert s.count("local_listener = '(ADDRESS=(PROTOCOL=TCP)(HOST=db2.home.lan)(PORT=1521))'") == 2
+
+
+def test_the_applications_to_bank_rw():
+    a = text('apps_forms.sh')
+    assert 'SERVICE_NAME = bank_rw' in a and '192.168.178.221' in a and '192.168.178.222' in a
+    assert '.bak' in a and 'RETRY_COUNT' in a and 'PRIMARY' in a
+    with open(os.path.join(DG, '..', 'k8s', 'deploy.sh'), encoding='utf-8') as f:
+        d = f.read()
+    url = re.search(r"DG_URL='([^']*)'", d).group(1)
+    # through the sed of deploy.sh (# its delimiter) and into YAML
+    assert '#' not in url and '&' not in url and 'SERVICE_NAME=bank_rw' in url and 'DB_URL=${BK_DB_URL:-$DG_URL}' in d
+
+
+def test_apps_forms_replaces_only_its_entry(tmp_path):
+    # the awk of apps_forms.sh: BK_DB out (its parentheses to the end), MM_DB and the rest kept
+    a = text('apps_forms.sh')
+    prog = a[a.index("awk -v a=\"$ALIAS\" '") + len("awk -v a=\"$ALIAS\" '"):]
+    prog = prog[:prog.index("' \"$TNS\"")]
+    t = tmp_path / 't.ora'
+    t.write_text('MM_DB =\n  (DESCRIPTION = (ADDRESS = (PROTOCOL = TCP)(HOST = forms1)(PORT = 1521))\n'
+                 '    (CONNECT_DATA = (SERVICE_NAME = FREEPDB1)))\n\nBK_DB =\n  (DESCRIPTION = (ADDRESS = '
+                 '(PROTOCOL = TCP)(HOST = forms1.home.lan)(PORT = 1521))\n    (CONNECT_DATA = (SERVICE_NAME = '
+                 'FREEPDB1)))\nX = (DESCRIPTION = (CONNECT_DATA = (SID = Y)))\n')
+    out = subprocess.run(['awk', '-v', 'a=BK_DB', prog, str(t)], capture_output=True, text=True, check=True).stdout
+    assert 'BK_DB' not in out and 'MM_DB =' in out and 'X = (DESCRIPTION' in out and out.count('FREEPDB1') == 1

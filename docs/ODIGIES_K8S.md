@@ -148,6 +148,8 @@ sudo ~/bank-k8s/deploy.sh <commit>          # την πρώτη φορά ζητ�
 sudo ~/bank-k8s/deploy.sh --status          # τα pods (σε ποιον κόμβο), service, ingress, autoscaler
 ```
 
+Η βάση: από προεπιλογή η υπηρεσία `bank_rw` του Data Guard στους db1/db2 ([ODIGIES_DG.md](ODIGIES_DG.md) §12). Την παλιά Free του forms1 τη δίνεις με `sudo BK_DB_URL=jdbc:oracle:thin:@//192.168.178.200:1521/FREEPDB1 ~/bank-k8s/deploy.sh <commit>`.
+
 Ο κωδικός μπαίνει σε ένα **Secret** του cluster (`bk-db`). Δεν γράφεται σε αρχείο, ούτε στην εικόνα, ούτε στο repo. Για να τον αλλάξεις: `sudo ~/bank-k8s/deploy.sh <commit> --password`.
 
 Η τράπεζα ανοίγει από **οποιονδήποτε κόμβο**: http://192.168.178.211/web/ (ή .212, .213), και το ATM στο http://192.168.178.211/atm/. Το Traefik του k3s ακούει στη θύρα 80 κάθε κόμβου.

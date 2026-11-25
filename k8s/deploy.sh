@@ -8,10 +8,13 @@
 #   sudo ./deploy.sh --status                the pods (on which node), the service, the Ingress, the autoscaler
 #   sudo ./deploy.sh --undo                  back to the version before
 #
-# The database: BK_DB_URL (jdbc:oracle:thin:@//192.168.178.200:1521/FREEPDB1: forms1).
+# The database: BK_DB_URL; by default the service bank_rw of Data Guard on db1 and db2 (docs/ODIGIES_DG.md:
+# whichever is the primary; after a failover the connections wait, RETRY_COUNT, and find db2). The Free of forms1
+# before it: BK_DB_URL=jdbc:oracle:thin:@//192.168.178.200:1521/FREEPDB1.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-DB_URL=${BK_DB_URL:-jdbc:oracle:thin:@//192.168.178.200:1521/FREEPDB1}
+DG_URL='jdbc:oracle:thin:@(DESCRIPTION=(CONNECT_TIMEOUT=5)(TRANSPORT_CONNECT_TIMEOUT=3)(RETRY_COUNT=20)(RETRY_DELAY=3)(ADDRESS_LIST=(LOAD_BALANCE=off)(FAILOVER=on)(ADDRESS=(PROTOCOL=TCP)(HOST=192.168.178.221)(PORT=1521))(ADDRESS=(PROTOCOL=TCP)(HOST=192.168.178.222)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=bank_rw)))'
+DB_URL=${BK_DB_URL:-$DG_URL}
 # (k3s by its full path: sudo on Oracle Linux does not look in /usr/local/bin)
 K="/usr/local/bin/k3s kubectl"
 [ -x /usr/local/bin/k3s ] || K=kubectl
