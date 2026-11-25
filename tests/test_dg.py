@@ -126,3 +126,8 @@ def test_active_data_guard_and_the_services():
     # bank_rw only on the primary; the apply stopped and started again around the open
     assert "if r = 'PRIMARY' then" in s and "down('bank_rw')" in s
     assert s.index("APPLY-OFF") < s.index('alter database open read only') < s.index("APPLY-ON")
+
+
+def test_adg_switches_the_log_from_the_root():
+    s = text('adg.sh')
+    assert s.index('alter session set container = CDB$ROOT;') < s.index('alter system archive log current;')
