@@ -111,3 +111,9 @@ def test_the_listener_starts_with_the_database():
         s = text(f)
         assert 'ExecStartPre=-$ORACLE_HOME/bin/lsnrctl start' in s, f
         assert s.index('ExecStartPre=-') < s.index('ExecStart=$ORACLE_HOME/bin/dbstart'), f
+
+
+def test_observer_knows_the_host_names():
+    # the broker starts a database by the host name of its static entry (db2.home.lan): ORA-12545 on forms1
+    o = text('observer.sh')
+    assert '192.168.178.222 db2.home.lan' in o and '192.168.178.221 db1.home.lan' in o
