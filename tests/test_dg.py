@@ -86,3 +86,14 @@ def test_running_asked_to_the_instance():
         assert 'pgrep' not in s and 'select status from v$instance' in s, f
     s = text('standby.sh')
     assert "set state='APPLY-OFF'" in s and "set state='APPLY-ON'" in s
+
+
+def test_fsfo_and_observer():
+    f, o = text('fsfo.sh'), text('observer.sh')
+    for want in ("LogXptMode = 'FASTSYNC'", 'MaxAvailability', 'FastStartFailoverTarget', 'enable fast_start failover',
+                 'FastStartFailoverAutoReinstate = TRUE'):
+        assert want in f, want
+    assert 'forms1*) ;;' in o and 'mkstore' in o and 'createCredential BANK_DB1 sys' in o
+    assert 'dgmgrl -silent /@BANK_DB1' in o and 'start observer' in o and 'Restart=always' in o
+    # the wallet: never a password in clear
+    assert not re.search(r'sys/\S', f + o)
