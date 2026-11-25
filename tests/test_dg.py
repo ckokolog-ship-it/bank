@@ -111,3 +111,18 @@ def test_the_listener_starts_with_the_database():
         s = text(f)
         assert 'ExecStartPre=-$ORACLE_HOME/bin/lsnrctl start' in s, f
         assert s.index('ExecStartPre=-') < s.index('ExecStart=$ORACLE_HOME/bin/dbstart'), f
+
+
+def test_observer_knows_the_host_names():
+    # the broker starts a database by the host name of its static entry (db2.home.lan): ORA-12545 on forms1
+    o = text('observer.sh')
+    assert '192.168.178.222 db2.home.lan' in o and '192.168.178.221 db1.home.lan' in o
+
+
+def test_active_data_guard_and_the_services():
+    s = text('adg.sh')
+    assert "mk('bank_rw')" in s and "mk('bank_ro')" in s
+    assert 'after startup on database' in s and 'open read only' in s
+    # bank_rw only on the primary; the apply stopped and started again around the open
+    assert "if r = 'PRIMARY' then" in s and "down('bank_rw')" in s
+    assert s.index("APPLY-OFF") < s.index('alter database open read only') < s.index("APPLY-ON")
