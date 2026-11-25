@@ -407,4 +407,48 @@ switchover to BANK_DB1;
 Το switchover γίνεται από το forms1, με `dgmgrl /@BANK_DB2`. Θέλει σύνδεση με κωδικό (το wallet), γιατί ο Broker
 επανεκκινεί τις βάσεις. Με το `dgmgrl /` στον db2 δεν μπορεί.
 
+## 11. Active Data Guard και οι υπηρεσίες ανά ρόλο
+
+Ο standby ανοίγει **READ ONLY** και ταυτόχρονα εφαρμόζει το redo (Real Time Query). Έτσι τα SELECT στον db2 βλέπουν τα
+δεδομένα του db1 με καθυστέρηση κάτω από ένα δευτερόλεπτο. Το Active Data Guard είναι option του Enterprise Edition με
+**δική του άδεια**. Εδώ το χρησιμοποιούμε για εκμάθηση.
+
+Στο `BANKPDB` υπάρχουν δύο υπηρεσίες που ακολουθούν τους ρόλους:
+
+| Υπηρεσία | Τρέχει | Για |
+|----------|--------|-----|
+| `bank_rw` | μόνο στον **primary** | τις εφαρμογές που γράφουν (web, ATM, φόρμες) |
+| `bank_ro` | στον **standby**, και στον primary ως εφεδρεία | μόνο ανάγνωση (reports, αναζήτηση) |
+
+Τις ξεκινά ένα trigger κάθε φορά που ανοίγει το PDB, ανάλογα με τον ρόλο. Έτσι μετά από failover ή switchover η
+`bank_rw` πηγαίνει μόνη της στον νέο primary. Ένα δεύτερο trigger στο root ανοίγει τα PDBs READ ONLY όταν ξεκινά ένας standby.
+
+**Στο forms1** (ως oracle):
+
+```bash
+cd ~/bank && git pull
+scp dg/adg.sh chris@192.168.178.221:
+scp dg/adg.sh chris@192.168.178.222:
+```
+
+**Πρώτα στον db1**, γιατί ο primary φτιάχνει τις υπηρεσίες και τα triggers, και μετά **στον db2**:
+
+```bash
+sudo bash ~/adg.sh
+```
+
+Στον db2 στο τέλος πρέπει να δεις `PHYSICAL STANDBY  READ ONLY WITH APPLY`, το `BANKPDB` σε `READ ONLY` και την
+υπηρεσία `bank_ro`. Στον db1 πρέπει να δεις τις `bank_rw` και `bank_ro`.
+
+Δοκιμή, από το forms1 (ως oracle):
+
+```bash
+sqlplus bank@//192.168.178.222:1521/bank_ro
+```
+```sql
+select count(*) from bk_account;
+select database_role from v$database;      -- PHYSICAL STANDBY
+insert into bk_setting values (null, null); -- ORA-16000: η βάση είναι ανοιχτή μόνο για ανάγνωση
+```
+
 Επόμενο βήμα: οι εφαρμογές στη νέα βάση (k3s, φόρμες, reports).
