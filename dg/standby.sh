@@ -96,6 +96,7 @@ run {
       set control_files = '$ORACLE_BASE/oradata/$UNIQUE/control01.ctl', '$ORACLE_BASE/fast_recovery_area/$UNIQUE/control02.ctl'
       set audit_file_dest = '$ORACLE_BASE/admin/$SID/adump'
       set fal_server = 'BANK_DB1'
+      set local_listener = '(ADDRESS=(PROTOCOL=TCP)(HOST=db2.home.lan)(PORT=1521))'
       set log_archive_dest_2 = ''
     nofilenamecheck;
 }
@@ -111,6 +112,10 @@ sqlsys <<'SQL'
 whenever sqlerror exit failure
 set feedback off
 alter system set dg_broker_start = TRUE scope = both;
+-- the services registered with the listener of this host (the spfile of db1 says LISTENER_BANK: an alias that
+-- only the tnsnames.ora of db1 knows; without it bank_ro was not reachable here: ORA-12514)
+alter system set local_listener = '(ADDRESS=(PROTOCOL=TCP)(HOST=db2.home.lan)(PORT=1521))' scope = both;
+alter system register;
 alter system set standby_file_management = AUTO scope = both;
 SQL
 

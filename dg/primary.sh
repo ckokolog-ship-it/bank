@@ -97,6 +97,8 @@ begin
     x('alter database add standby logfile thread 1 size ' || sz);
   end loop;
   x('alter system set dg_broker_start = TRUE scope = both');
+  -- the listener by its address, not by the alias LISTENER_BANK of dbca (it goes to db2 with the spfile)
+  x('alter system set local_listener = ''(ADDRESS=(PROTOCOL=TCP)(HOST=db1.home.lan)(PORT=1521))'' scope = both');
   select count(*) into n from v$pdbs where name = 'BANKPDB' and open_mode = 'READ WRITE';
   if n = 0 then x('alter pluggable database BANKPDB open'); end if;
 end;

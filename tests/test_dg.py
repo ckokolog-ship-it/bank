@@ -131,3 +131,10 @@ def test_active_data_guard_and_the_services():
 def test_adg_switches_the_log_from_the_root():
     s = text('adg.sh')
     assert s.index('alter session set container = CDB$ROOT;') < s.index('alter system archive log current;')
+
+
+def test_local_listener_by_address():
+    # LISTENER_BANK (dbca) went to db2 with the spfile; its tnsnames.ora did not know it: bank_ro not registered
+    assert "(HOST=db1.home.lan)(PORT=1521))'' scope = both" in text('primary.sh')
+    s = text('standby.sh')
+    assert s.count("local_listener = '(ADDRESS=(PROTOCOL=TCP)(HOST=db2.home.lan)(PORT=1521))'") == 2
