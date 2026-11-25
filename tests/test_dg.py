@@ -77,3 +77,12 @@ def test_standby_and_broker():
     assert 'rman target sys@BANK_DB1 auxiliary sys@BANK_DB2 ' in s and not re.search(r'sys/\S', s)
     assert 'db1) ;;' in b and 'create configuration bank' in b and 'enable configuration' in b
     assert 'dgmgrl -silent /' in b
+
+
+def test_running_asked_to_the_instance():
+    # 26ai names its processes otherwise: pgrep missed a running standby and standby.sh began a duplicate again
+    for f in ('primary.sh', 'standby.sh'):
+        s = text(f)
+        assert 'pgrep' not in s and 'select status from v$instance' in s, f
+    s = text('standby.sh')
+    assert "set state='APPLY-OFF'" in s and "set state='APPLY-ON'" in s
