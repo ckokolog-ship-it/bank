@@ -73,6 +73,8 @@ begin
   begin dbms_service.start_service('bank_ro'); exception when others then null; end;
 end;
 /
+-- (the root: a switch of the log is not allowed from a PDB, ORA-65040)
+alter session set container = CDB$ROOT;
 alter system archive log current;
 SQL
   echo "== now on db2: sudo bash ~/adg.sh"
