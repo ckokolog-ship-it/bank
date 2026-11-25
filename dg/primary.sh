@@ -117,8 +117,12 @@ Type=oneshot
 RemainAfterExit=yes
 User=oracle
 Group=oinstall
+Environment=ORACLE_HOME=$ORACLE_HOME
+# the listener first, always (dbstart alone left it down after a power off: no reinstate, no redo)
+ExecStartPre=-$ORACLE_HOME/bin/lsnrctl start
 ExecStart=$ORACLE_HOME/bin/dbstart $ORACLE_HOME
 ExecStop=$ORACLE_HOME/bin/dbshut $ORACLE_HOME
+ExecStopPost=-$ORACLE_HOME/bin/lsnrctl stop
 TimeoutStartSec=600
 TimeoutStopSec=600
 
