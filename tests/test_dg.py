@@ -97,3 +97,9 @@ def test_fsfo_and_observer():
     assert 'dgmgrl -silent /@BANK_DB1' in o and 'start observer' in o and 'Restart=always' in o
     # the wallet: never a password in clear
     assert not re.search(r'sys/\S', f + o)
+
+
+def test_observer_check_reads_all():
+    # grep -q in a pipe with pipefail: a connection that worked counted as failed
+    o = text('observer.sh')
+    assert 'tee /dev/stderr | grep -q' not in o and 'grep -qi "bank_db2" <<<"$OUT"' in o

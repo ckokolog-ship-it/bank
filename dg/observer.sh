@@ -6,7 +6,7 @@
 # with the password of SYS for both (mkstore asks a password for the wallet and the one of SYS; never in a file in
 # clear); then a systemd service dg-observer that keeps it running (and starts it with forms1):
 #
-#   cd ~oracle/bank && sudo bash dg/observer.sh
+#   sudo bash /home/oracle/bank/dg/observer.sh        (as chris: /home/oracle is closed to chris, not to sudo)
 set -euo pipefail
 DIR=/home/oracle/dg
 die() { echo "== $*" >&2; exit 1; }
@@ -40,7 +40,10 @@ if [ ! -f "$DIR/wallet/cwallet.sso" ]; then
   ora "mkstore -wrl $DIR/wallet -createCredential BANK_DB2 sys"
 fi
 echo "== the wallet works: dgmgrl /@BANK_DB1"
-echo "show configuration;" | ora "dgmgrl -silent /@BANK_DB1" | tee /dev/stderr | grep -qi "bank_db2" \
+# (the whole output first: grep -q stops reading early, and with pipefail that counted as a failure)
+OUT=$(echo "show configuration;" | ora "dgmgrl -silent /@BANK_DB1" 2>&1 || true)
+echo "$OUT"
+grep -qi "bank_db2" <<<"$OUT" \
   || die "dgmgrl /@BANK_DB1 did not connect (the password of SYS in the wallet? mkstore -wrl $DIR/wallet -modifyCredential BANK_DB1 sys)"
 
 echo "== systemd: dg-observer"
