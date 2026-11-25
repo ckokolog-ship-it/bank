@@ -18,6 +18,13 @@ OH=$(awk -F: '/^[A-Za-z0-9_]+:\// && $2 != "" {print $2; exit}' /etc/oratab)
 [ -x "$OH/bin/mkstore" ] || die "no mkstore in $OH/bin"
 ora() { runuser -l oracle -c "export TNS_ADMIN=$DIR ORACLE_HOME=$OH PATH=$OH/bin:\$PATH; $1"; }
 
+echo "== /etc/hosts: db1, db2 (the broker starts a database by its host name: db2.home.lan)"
+sed -i '/# bank-dg-hosts$/d' /etc/hosts
+cat >> /etc/hosts <<'HOSTS'
+192.168.178.221 db1.home.lan db1 # bank-dg-hosts
+192.168.178.222 db2.home.lan db2 # bank-dg-hosts
+HOSTS
+
 echo "== $DIR: tnsnames.ora, sqlnet.ora (the wallet)"
 mkdir -p "$DIR/wallet"
 cat > "$DIR/tnsnames.ora" <<'TNS'

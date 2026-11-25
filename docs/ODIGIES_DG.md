@@ -400,6 +400,10 @@ scp dg/oracle_unit.sh chris@192.168.178.222:
 switchover to BANK_DB1;
 ```
 
+Αν το switchover πει `ORA-12545` για το `db2.home.lan` και «start up and mount instance», το forms1 δεν ξέρει τα
+ονόματα db1/db2. Το `observer.sh` τα βάζει πλέον στο `/etc/hosts`. Για να ολοκληρωθεί το switchover, στον db2 (ως oracle) τρέχεις
+`sqlplus / as sysdba` και `startup mount`.
+
 Το switchover γίνεται από το forms1, με `dgmgrl /@BANK_DB2`. Θέλει σύνδεση με κωδικό (το wallet), γιατί ο Broker
 επανεκκινεί τις βάσεις. Με το `dgmgrl /` στον db2 δεν μπορεί.
 
