@@ -336,9 +336,12 @@ sudo bash ~/fsfo.sh
 **Στο forms1** (ως chris, με sudo):
 
 ```bash
-cd ~oracle/bank && sudo bash dg/observer.sh
+sudo bash /home/oracle/bank/dg/observer.sh
 ```
 
+- Το `/home/oracle` δεν ανοίγει για τον chris, γι' αυτό δεν γίνεται `cd` εκεί. Με το `sudo` όμως το script διαβάζεται κανονικά.
+- Το wallet: ο κωδικός του SYS γράφεται **χωρίς εισαγωγικά**, ακόμα κι αν έχει `@`. Τα εισαγωγικά χρειάζονται μόνο στα `expdp`/`impdp`/`rman`.
+- Για δοκιμή με το χέρι, ως `oracle`: `export TNS_ADMIN=/home/oracle/dg`, γιατί αλλιώς το `TNS_ADMIN` δείχνει στο Forms domain.
 - Το script φτιάχνει τα δικά του αρχεία δικτύου στο `/home/oracle/dg`, ώστε να μην πειράξει τις υπόλοιπες ρυθμίσεις του forms1.
 - Φτιάχνει ένα **wallet** με τον κωδικό του SYS. Έτσι ο observer συνδέεται χωρίς να γράφεται κωδικός πουθενά. Το `mkstore` ζητά:
   1. έναν **νέο κωδικό για το wallet**, δύο φορές (όποιον θέλεις, κράτα τον);
