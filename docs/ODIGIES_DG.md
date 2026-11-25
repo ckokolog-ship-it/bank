@@ -309,4 +309,76 @@ dgmgrl /
 show configuration lag;
 ```
 
-Επόμενο βήμα: το Fast-Start Failover, με τον observer στο forms1.
+## 9. Fast-Start Failover και ο observer (forms1)
+
+Ο **observer** είναι ένα μικρό πρόγραμμα (`dgmgrl`) σε **τρίτο μηχάνημα**, το forms1, που βλέπει και τον db1 και τον db2.
+Αν ο primary χαθεί για 30 δευτερόλεπτα, ενώ ο observer και ο standby βλέπουν ακόμα ο ένας τον άλλον, κάνει τον standby
+primary **μόνος του**. Όταν ο παλιός primary ξαναγυρίσει, γίνεται standby μόνος του (reinstate, με το flashback).
+
+**Στο forms1** (ως `oracle`), τα scripts:
+
+```bash
+cd ~/bank && git pull
+scp dg/fsfo.sh chris@192.168.178.221:
+```
+
+**Στον db1:**
+
+```bash
+sudo bash ~/fsfo.sh
+```
+
+- Το redo πηγαίνει **σύγχρονα** στον db2 (`FASTSYNC`). Ένα commit περιμένει μέχρι να το έχει και ο db2, οπότε
+  σε failover δεν χάνεται καμία συναλλαγή.
+- Η προστασία γίνεται `MaxAvailability`, και το Fast-Start Failover ενεργοποιείται με όριο 30 δευτερόλεπτα.
+- Μέχρι να ξεκινήσει ο observer, το `show fast_start failover` λέει ότι δεν υπάρχει observer. Αυτό είναι αναμενόμενο.
+
+**Στο forms1** (ως chris, με sudo):
+
+```bash
+cd ~oracle/bank && sudo bash dg/observer.sh
+```
+
+- Το script φτιάχνει τα δικά του αρχεία δικτύου στο `/home/oracle/dg`, ώστε να μην πειράξει τις υπόλοιπες ρυθμίσεις του forms1.
+- Φτιάχνει ένα **wallet** με τον κωδικό του SYS. Έτσι ο observer συνδέεται χωρίς να γράφεται κωδικός πουθενά. Το `mkstore` ζητά:
+  1. έναν **νέο κωδικό για το wallet**, δύο φορές (όποιον θέλεις, κράτα τον);
+  2. τον κωδικό του **SYS** της BANK, για τον BANK_DB1 και ξανά για τον BANK_DB2 (δύο φορές ο καθένας).
+- Μετά ξεκινά την υπηρεσία `dg-observer`, που τρέχει πάντα και ξεκινά μαζί με το forms1.
+
+Στο τέλος πρέπει να δεις:
+
+```
+Fast-Start Failover: Enabled in Zero Data Loss Mode
+  Protection Mode:    MaxAvailability
+  Threshold:          30 seconds
+  Active Target:      bank_db2
+  Observer:           forms1...
+```
+
+Ο observer χρησιμοποιεί το `dgmgrl` της Free του forms1. Αν το script πει `no dgmgrl` ή `no mkstore`, στείλε μου
+την έξοδο. Τότε ο observer θα μπει με άλλο τρόπο, π.χ. σε container ή στον k3s1.
+
+## 10. Δοκιμή failover
+
+**Στον Windows host**, κλείσε απότομα τον db1: VirtualBox → db1 → Close → **Power off**.
+
+Μετά από 30–60 δευτερόλεπτα, στο forms1:
+
+```bash
+sudo su - oracle
+TNS_ADMIN=/home/oracle/dg dgmgrl /@BANK_DB2
+```
+```
+show configuration;
+```
+
+Πρέπει να δεις τον `bank_db2` ως **Primary**, και τον `BANK_DB1` να χρειάζεται reinstate. Ξεκίνα πάλι τον db1. Σε λίγα
+λεπτά γίνεται **standby** μόνος του. Το log του observer: `tail -f /home/oracle/dg/observer.log`.
+
+Για επιστροφή στην αρχική κατάσταση, χωρίς απώλεια:
+
+```
+switchover to BANK_DB1;
+```
+
+Επόμενο βήμα: οι εφαρμογές στη νέα βάση (k3s, φόρμες, reports).
