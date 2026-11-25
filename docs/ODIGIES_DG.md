@@ -268,6 +268,10 @@ NAME     DB_UNIQUE_NA DATABASE_ROLE    OPEN_MODE   FLASHBACK_ON
 BANK     BANK_DB2     PHYSICAL STANDBY MOUNTED     YES
 ```
 
+Το flashback του standby **δεν ανάβει αμέσως μετά το RMAN** (ORA-38788), γιατί θέλει πρώτα να εφαρμοστεί λίγο redo.
+Γι' αυτό, αφού τρέξει το `broker.sh` (§8), τρέξε ξανά το `sudo bash ~/standby.sh` στον db2. Τότε σταματά για λίγο το apply,
+ανάβει το flashback και ξαναξεκινά το apply. Το ξανατρέξιμο είναι ασφαλές: δεν ξαναφτιάχνει τον standby.
+
 Αν το RMAN αποτύχει, το log του είναι στο `/u01/app/oracle/dup_standby.log`: `sudo tail -40 /u01/app/oracle/dup_standby.log`.
 
 ## 8. Ο Broker (db1)

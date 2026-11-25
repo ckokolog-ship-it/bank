@@ -24,7 +24,9 @@ esac
 [ -x "$ORACLE_HOME/bin/rman" ] || die "no $ORACLE_HOME/bin/rman: first dg/db_host.sh"
 ora() { runuser -l oracle -c "$1"; }
 sqlsys() { runuser -l oracle -c "sqlplus -s / as sysdba"; }
-running() { pgrep -x "(ora|db)_pmon_$SID" >/dev/null; }
+# running or not: asked to the instance itself (the names of its processes differ by version)
+running() { printf 'set heading off feedback off pages 0\nselect status from v$instance;\n' | sqlsys 2>/dev/null | grep -qE '^(STARTED|MOUNTED|OPEN)'; }
+dgm() { runuser -l oracle -c "dgmgrl -silent /"; }
 
 echo "== the password file of db1"
 PW=$ORACLE_HOME/dbs/orapw$SID
@@ -104,24 +106,29 @@ RMAN
   rm -f "$ORACLE_HOME/dbs/init$SID.ora"
 fi
 
-echo "== flashback, the broker started, the database with the VM"
+echo "== the broker started"
 sqlsys <<'SQL'
 whenever sqlerror exit failure
 set feedback off
-declare
-  n number;
-begin
-  select count(*) into n from v$database where flashback_on = 'YES';
-  if n = 0 then
-    begin execute immediate 'alter database recover managed standby database cancel';
-    exception when others then null; end;
-    execute immediate 'alter database flashback on';
-  end if;
-  execute immediate 'alter system set dg_broker_start = TRUE scope = both';
-  execute immediate 'alter system set standby_file_management = AUTO scope = both';
-end;
-/
+alter system set dg_broker_start = TRUE scope = both;
+alter system set standby_file_management = AUTO scope = both;
 SQL
+
+# flashback (Fast-Start Failover wants it): on a standby only with the apply stopped, and only once the files are
+# recovered enough (ORA-38788 right after the duplicate): so after the broker (dg/broker.sh on db1) applies the redo
+FB=$(printf 'set heading off feedback off pages 0\nselect flashback_on from v$database;\n' | sqlsys | tr -d '[:space:]')
+if [ "$FB" = YES ]; then
+  echo "== flashback: on"
+elif echo "show configuration;" | dgm | grep -qi "bank_db2"; then  # (the member: its words may be Greek)
+  echo "== flashback: the apply stopped a moment"
+  echo "edit database bank_db2 set state='APPLY-OFF';" | dgm
+  printf 'whenever sqlerror continue\nalter database flashback on;\n' | sqlsys
+  echo "edit database bank_db2 set state='APPLY-ON';" | dgm
+else
+  echo "== flashback: not yet (first the broker: sudo bash ~/broker.sh on db1; then this again)"
+fi
+
+echo "== the database with the VM: systemd oracle-bank"
 cat > /etc/systemd/system/oracle-bank.service <<UNIT
 [Unit]
 Description=Oracle database $SID and its listener
