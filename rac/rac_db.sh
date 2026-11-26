@@ -37,7 +37,9 @@ for dg in DATA:data1 RECO:reco1; do
     printf "whenever sqlerror exit failure\ncreate diskgroup %s external redundancy disk '%s' attribute 'au_size'='4M', 'compatible.asm'='23.0', 'compatible.rdbms'='23.0';\n" "$name" "$disk" \
       | G "sqlplus -s / as sysasm"
   fi
-  G "srvctl start diskgroup -diskgroup $name -node rac1,rac2" 2>/dev/null || true
+  # (each node by itself: started on one already, PRCZ-4054 stopped the start on the other)
+  for node in rac1 rac2; do G "srvctl start diskgroup -diskgroup $name -node $node" >/dev/null 2>&1 || true; done
+  G "srvctl status diskgroup -diskgroup $name"
 done
 G "asmcmd lsdg"
 
@@ -96,7 +98,8 @@ if G "srvctl status database -db $DB" >/dev/null 2>&1 || D "srvctl status databa
   echo "   there already"
 else
   echo "   dbca asks the passwords: SYS, SYSTEM, the admin of the PDB (one strong one; no @, no \")"
-  D "dbca -silent -createDatabase -templateName General_Purpose.dbc \
+  # -ignorePreReqs: its cluvfy wants the SCAN in a DNS (here: /etc/hosts, CRITICAL for it; the SCAN works)
+  D "dbca -silent -ignorePreReqs -createDatabase -templateName General_Purpose.dbc \
     -gdbName $DB -sid $DB -databaseConfigType RAC -nodelist rac1,rac2 \
     -createAsContainerDatabase true -numberOfPDBs 1 -pdbName BANKPDB -useLocalUndoForPDBs true \
     -storageType ASM -diskGroupName +DATA -recoveryGroupName +RECO -recoveryAreaSize 15360 -enableArchive true \
