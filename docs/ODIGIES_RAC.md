@@ -196,4 +196,54 @@ asmcmd lsdg
 | το `root.sh` του rac1 αποτυγχάνει | `sudo tail -50 /u01/app/oracle/crsdata/rac1/crsconfig/rootcrs_rac1_*.log` |
 | `PRVG-…` / `INS-…` στο cluvfy | Στείλε μου το `grep -B2 -A6 FAILED /u01/app/oracle/rac_grid/cluvfy.txt` |
 
-Επόμενο βήμα: η βάση (DATA, RECO, το λογισμικό της, το dbca).
+## 7. Η RAC βάση (rac1)
+
+**Από το i9**, το zip της βάσης στο rac1:
+
+```powershell
+scp "D:\RAC\LINUX.X64_2326100_db_home.zip" chris@192.168.178.231:
+```
+
+**Από το forms1** (ως oracle):
+
+```bash
+cd ~/bank && git pull
+scp rac/rac_db.sh chris@192.168.178.231:
+```
+
+**Στο rac1:**
+
+```bash
+sudo bash ~/rac_db.sh ~/LINUX.X64_2326100_db_home.zip
+```
+
+1. **Disk groups:** το **DATA** στο `data1` και το **RECO** στο `reco1`, με external redundancy, mounted και στους δύο κόμβους.
+2. **Το λογισμικό της βάσης** στο `/u01/app/oracle/product/26ai/dbhome_1`:
+   - το zip αποσυμπιέζεται στο rac1;
+   - το `runInstaller -silent` για τους κόμβους rac1 και rac2 το αντιγράφει μόνο του στο rac2;
+   - το `root.sh` τρέχει και στους δύο. Για το rac2 ζητά τον κωδικό του chris και του sudo.
+3. **dbca** (30–60 λεπτά): η **RAC** CDB **`BANKRAC`**, με instances **`BANKRAC1`** (rac1) και **`BANKRAC2`** (rac2) και το PDB
+   **`BANKPDB`**. Τα αρχεία μπαίνουν στο `+DATA`, το recovery area και τα archived logs στο `+RECO`.
+   Το **dbca ζητά τους κωδικούς** (SYS, SYSTEM, PDB). Βάλε έναν ισχυρό κωδικό, χωρίς `@` και `"`.
+4. **Το περιβάλλον του oracle:** μετά το login είσαι στη βάση (`db`). Με την εντολή `grid` πας στο ASM και το Clusterware, και με
+   `db` γυρίζεις πίσω.
+5. **Τι τρέχει:**
+
+```
+Instance BANKRAC1 is running on node rac1
+Instance BANKRAC2 is running on node rac2
+   INST_ID INSTANCE_NAME    HOST_NAME        STATUS
+         1 BANKRAC1         rac1.home.lan    OPEN
+         2 BANKRAC2         rac2.home.lan    OPEN
+```
+
+Έλεγχος, ως oracle (`sudo su - oracle`) σε οποιονδήποτε κόμβο:
+
+```bash
+srvctl status database -db BANKRAC
+sqlplus system@//rac-scan.home.lan:1521/BANKPDB
+```
+
+Η σύνδεση μέσω **SCAN** πηγαίνει σε όποιο instance έχει λιγότερο φόρτο.
+
+Επόμενο βήμα: η τράπεζα στο RAC και οι δοκιμές.

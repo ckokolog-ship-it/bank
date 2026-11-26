@@ -69,3 +69,15 @@ def test_rac_grid_keys_of_23_26():
     assert 'clusterUsage RAC' in s and 'STANDALONE' not in s
     for gone in ('configureRHPS', 'configureAFD', 'setk ORACLE_BASE'):
         assert gone not in s, gone
+
+
+def test_rac_db():
+    s = text('rac_db.sh')
+    assert 'rac1) ;;' in s and "create diskgroup %s external redundancy" in s
+    assert 'DATA:data1 RECO:reco1' in s and '-node rac1,rac2' in s
+    assert 'clusterNodes rac1,rac2' in s and 'INSTALL_DB_SWONLY' in s and 'installEdition EE' in s
+    assert '-databaseConfigType RAC -nodelist rac1,rac2' in s and '-diskGroupName +DATA' in s and '-recoveryGroupName +RECO' in s
+    # the passwords: asked by dbca, never on its command line
+    assert not re.search(r'-(sys|system|pdbAdmin)Password', s)
+    # root.sh: rac1 first, then rac2
+    assert s.index('"$DB_HOME/root.sh"') < s.index('sudo $DB_HOME/root.sh')
