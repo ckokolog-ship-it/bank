@@ -74,7 +74,7 @@ def test_rac_grid_keys_of_23_26():
 def test_rac_db():
     s = text('rac_db.sh')
     assert 'rac1) ;;' in s and "create diskgroup %s external redundancy" in s
-    assert 'DATA:data1 RECO:reco1' in s and '-node rac1,rac2' in s
+    assert 'DATA:data1 RECO:reco1' in s and 'for node in rac1 rac2' in s and '-ignorePreReqs' in s
     assert 'clusterNodes rac1,rac2' in s and 'INSTALL_DB_SWONLY' in s and 'installEdition EE' in s
     assert '-databaseConfigType RAC -nodelist rac1,rac2' in s and '-diskGroupName +DATA' in s and '-recoveryGroupName +RECO' in s
     # the passwords: asked by dbca, never on its command line
