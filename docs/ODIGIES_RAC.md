@@ -142,4 +142,58 @@ sudo bash ~/rac_ssh.sh
 | `no second card` | Το `rac_disks.ps1` δεν έβαλε τη δεύτερη κάρτα. Τρέξ' το ξανά με τα VMs σβηστά |
 | `ssh of oracle without a password did not work` | Τρέξε ξανά το `rac_ssh.sh` |
 
-Επόμενο βήμα: το Grid Infrastructure.
+## 6. Το Grid Infrastructure (rac1)
+
+Ο **Clusterware** ενώνει τους δύο κόμβους σε cluster. Το **ASM** διαχειρίζεται τους κοινούς δίσκους. Από το forms1 (ως oracle):
+
+```bash
+cd ~/bank && git pull
+scp rac/rac_grid.sh chris@192.168.178.231:
+```
+
+Στο **rac1** (ssh στην .231):
+
+```bash
+sudo bash ~/rac_grid.sh
+```
+
+1. **Έλεγχοι:** το grid έχει αποσυμπιεστεί, ο oracle μπαίνει στο rac2 χωρίς κωδικό, και ο κοινός δίσκος φαίνεται και στους δύο κόμβους.
+2. **Ο κωδικός του ASM** (SYS και ASMSNMP), δύο φορές. **Χωρίς `@`, `"` και `/`**, γιατί σπάνε τα εργαλεία. Μπαίνει σε ένα
+   response file που διαβάζει μόνο ο oracle και σβήνεται στο τέλος.
+3. **cluvfy:** ο έλεγχος των προαπαιτούμενων. Η αναφορά του γράφεται στο `/u01/app/oracle/rac_grid/cluvfy.txt`. Σε εργαστήριο
+   κάποια αποτυγχάνουν (swap, DNS για το SCAN), και αυτό δεν σταματά την εγκατάσταση.
+4. **`gridSetup.sh -silent`** (10–20 λεπτά): αντιγράφει το λογισμικό στο rac2 και ρυθμίζει το cluster `rac`, με SCAN `rac-scan`,
+   τα VIPs και το disk group **CRS** στο `/dev/oracleasm/crs1`.
+5. **Τα scripts του root:** πρώτα στο rac1 (ξεκινά το cluster) και μετά στο rac2 (μπαίνει στο cluster). Για το rac2 ζητά τον
+   κωδικό του chris και του sudo εκεί. Το `root.sh` θέλει 5–10 λεπτά σε κάθε κόμβο.
+6. **Τα configuration tools.**
+7. **Τι τρέχει:** στο τέλος δείχνει το `crsctl stat res -t`, το SCAN και το ASM.
+
+Στο τέλος πρέπει να δεις:
+
+```
+CRS-4537: Cluster Ready Services is online
+...
+ora.asm  ONLINE ONLINE rac1 / rac2
+ora.rac1.vip  ONLINE ONLINE rac1
+ora.rac2.vip  ONLINE ONLINE rac2
+ora.scan1.vip ONLINE ONLINE ...
+```
+
+Έλεγχος, ως oracle (`sudo su - oracle`):
+
+```bash
+crsctl stat res -t
+olsnodes -n -s
+asmcmd lsdg
+```
+
+### Αν κάτι πάει στραβά
+
+| Μήνυμα | Τι κάνεις |
+|--------|-----------|
+| `gridSetup.sh: <νούμερο>` | Το log είναι στο `/u01/app/oraInventory/logs/GridSetupActions*/gridSetupActions*.log`. Στείλε μου τις τελευταίες 50 γραμμές |
+| το `root.sh` του rac1 αποτυγχάνει | `sudo tail -50 /u01/app/oracle/crsdata/rac1/crsconfig/rootcrs_rac1_*.log` |
+| `PRVG-…` / `INS-…` στο cluvfy | Στείλε μου το `grep -B2 -A6 FAILED /u01/app/oracle/rac_grid/cluvfy.txt` |
+
+Επόμενο βήμα: η βάση (DATA, RECO, το λογισμικό της, το dbca).

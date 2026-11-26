@@ -47,3 +47,17 @@ def test_rac_disks_ps1():
     s = text('rac_disks.ps1')
     assert '--intnet2 racpriv' in s and '--variant Fixed' in s and '--type shareable' in s
     assert '--mtype shareable' in s and "-split ','" in s and 'is running' in s
+
+
+def test_rac_grid():
+    s = text('rac_grid.sh')
+    assert 'rac1) ;;' in s and '-ignorePrereqFailure' in s and '-executeConfigTools' in s
+    for want in ('CRS_CONFIG', 'FLEX_ASM_STORAGE', 'clusterName clusterName rac', 'rac-scan.home.lan',
+                 'rac1.home.lan:rac1-vip.home.lan,rac2.home.lan:rac2-vip.home.lan', 'diskList /dev/oracleasm/crs1',
+                 ':192.168.178.0:1,', ':10.10.10.0:5', 'executeRootScript false'):
+        assert want in s, want
+    # the password: asked, into a file readable by oracle only, removed; never on a command line
+    assert 'read -rsp' in s and '-m 600' in s and "trap 'rm -f \"$RSP\"' EXIT" in s
+    assert not re.search(r'-(sysasm|asmsnmp)Password\s', s, re.I)
+    # root.sh: rac1 first, then rac2
+    assert s.index('"$GRID_HOME/root.sh"') < s.index('chris@$OTHER')
