@@ -61,3 +61,11 @@ def test_rac_grid():
     assert not re.search(r'-(sysasm|asmsnmp)Password\s', s, re.I)
     # root.sh: rac1 first, then rac2
     assert s.index('"$GRID_HOME/root.sh"') < s.index('chris@$OTHER')
+
+
+def test_rac_grid_keys_of_23_26():
+    # INS-10105 of 23.26: clusterUsage RAC|GENERAL_PURPOSE; no configureRHPS, configureAFD, ORACLE_BASE in its rsp
+    s = text('rac_grid.sh')
+    assert 'clusterUsage RAC' in s and 'STANDALONE' not in s
+    for gone in ('configureRHPS', 'configureAFD', 'setk ORACLE_BASE'):
+        assert gone not in s, gone

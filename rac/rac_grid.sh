@@ -46,7 +46,8 @@ else
   RSP=$LOG/grid.rsp
   trap 'rm -f "$RSP"' EXIT
   install -o oracle -g oinstall -m 600 "$TPL" "$RSP"
-  # a key by its name in this version (with oracle.install. or without), the value; not there: added
+  # a key by its name in this version (with oracle.install. or without), the value; not there: added by its first
+  # name (one the installer of 23.26 knows: INS-10105 lists them)
   setk() {
     local v=${!#} n
     for n in "${@:1:$#-1}"; do
@@ -59,11 +60,11 @@ else
   }
   setk oracle.install.option installOption CRS_CONFIG
   setk INVENTORY_LOCATION "$INVENTORY"
-  setk ORACLE_BASE "$ORACLE_BASE"
-  setk oracle.install.asm.OSDBA OSDBA asmdba
-  setk oracle.install.asm.OSOPER OSOPER asmoper
-  setk oracle.install.asm.OSASM OSASM asmadmin
-  setk oracle.install.crs.config.ClusterConfiguration clusterUsage STANDALONE
+  setk oracle.install.asm.OSDBA OSDBA OSDBA_GROUP asmdba
+  setk oracle.install.asm.OSOPER OSOPER OSOPER_GROUP asmoper
+  setk oracle.install.asm.OSASM OSASM_GROUP asmadmin
+  # (23.26: RAC or GENERAL_PURPOSE)
+  setk oracle.install.crs.config.clusterUsage clusterUsage RAC
   setk oracle.install.crs.config.configureAsExtendedCluster configureAsExtendedCluster false
   setk oracle.install.crs.config.clusterName clusterName rac
   setk oracle.install.crs.config.gpnp.scanName scanName rac-scan.home.lan
@@ -75,13 +76,11 @@ else
   # (1: public; 5: the interconnect and ASM)
   setk oracle.install.crs.config.networkInterfaceList networkInterfaceList "$(ip -4 route show default | awk '{print $5; exit}'):192.168.178.0:1,$(nmcli -t -f GENERAL.DEVICES con show racpriv | cut -d: -f2):10.10.10.0:5"
   setk oracle.install.crs.config.storageOption storageOption FLEX_ASM_STORAGE
-  setk oracle.install.asm.diskGroup.name diskGroupName CRS
+  setk oracle.install.asm.diskGroup.name dbDiskGroupName CRS
   setk oracle.install.asm.diskGroup.redundancy redundancy EXTERNAL
   setk oracle.install.asm.diskGroup.AUSize auSize 4
   setk oracle.install.asm.diskGroup.disks diskList /dev/oracleasm/crs1
   setk oracle.install.asm.diskGroup.diskDiscoveryString diskString "/dev/oracleasm/*"
-  setk oracle.install.asm.configureAFD configureAFD false
-  setk oracle.install.crs.configureRHPS configureRHPS false
   setk oracle.install.crs.config.ignoreDownNodes ignoreDownNodes false
   setk oracle.install.config.managementOption managementOption NONE
   setk oracle.install.crs.rootconfig.executeRootScript executeRootScript false
