@@ -246,4 +246,64 @@ sqlplus system@//rac-scan.home.lan:1521/BANKPDB
 
 Η σύνδεση μέσω **SCAN** πηγαίνει σε όποιο instance έχει λιγότερο φόρτο.
 
-Επόμενο βήμα: η τράπεζα στο RAC και οι δοκιμές.
+## 8. Δοκιμή: πτώση κόμβου
+
+1. Στο rac1 (ως oracle): `sqlplus system@//rac-scan.home.lan:1521/BANKRAC_BANKPDB` και
+   `select instance_name from v$instance;`. Ξανασυνδέσου μέχρι να πέσεις στο **BANKRAC2**.
+2. VirtualBox: **rac2 → Close → Power Off**.
+3. Το επόμενο `select` στο ίδιο sqlplus βγάζει σφάλμα (η σύνδεση χάθηκε). Μια νέα σύνδεση πηγαίνει στο **BANKRAC1**.
+4. Με `srvctl status database -db BANKRAC` βλέπεις ότι το BANKRAC2 δεν τρέχει. Με `crsctl stat res -t` βλέπεις ότι
+   ο **VIP του rac2 τρέχει πλέον στο rac1**. Γι' αυτό οι clients του παίρνουν αμέσως «refused» αντί να περιμένουν timeout.
+5. Ξεκίνα το rac2. Σε 3–5 λεπτά το BANKRAC2 και ο VIP επιστρέφουν μόνα τους.
+
+Στο βήμα 3 η εφαρμογή **βλέπει** σφάλμα. Με την υπηρεσία `bank_rac` (§9) και **Application Continuity** δεν το βλέπει:
+η σύνδεση συνεχίζει στο άλλο instance και η συναλλαγή ξαναπαίζεται.
+
+## 9. Η τράπεζα στο RAC
+
+Ένα αντίγραφο του `BANK` από τον **db1** (τον primary του Data Guard στο laptop) στο `BANKPDB` του RAC. Η τράπεζα συνεχίζει στον
+db1, και το RAC είναι το εργαστήριο.
+
+**Από το forms1** (ως oracle):
+
+```bash
+cd ~/bank && git pull
+scp rac/db1_export.sh rac/rac_bank.sh chris@192.168.178.221:
+```
+
+**Στον db1:**
+
+```bash
+sudo bash ~/db1_export.sh
+```
+
+- Το `expdp` ζητά τον κωδικό του **SYSTEM του db1**. Αν έχει `@`, γράψ' τον μέσα σε διπλά εισαγωγικά.
+- Το `scp` ζητά τον κωδικό του **chris στο rac1**.
+- Στέλνει στο rac1 το dump, τα αρχεία του AI και το `rac_bank.sh`.
+
+**Στο rac1:**
+
+```bash
+sudo bash ~/rac_bank.sh
+```
+
+1. Τα αρχεία του AI πηγαίνουν στο `/u01/app/oracle/bank` **και των δύο κόμβων**, γιατί οποιοδήποτε instance μπορεί να τα διαβάσει.
+2. `impdp` στο `BANKPDB`. Ζητά τον κωδικό του **SYSTEM του BANKRAC**, αυτόν του dbca. Ο `BANK` έρχεται με τον κωδικό που είχε.
+3. Τα δικαιώματα που δεν μεταφέρει το Data Pump: `DBMS_CRYPTO`, οι κατάλογοι και το ACL προς το Ollama.
+4. Η υπηρεσία **`bank_rac`**, και στα δύο instances, με **Transparent Application Continuity**:
+   - `failovertype AUTO`: η συνεδρία ενός κόμβου που πέφτει συνεχίζει στον άλλο και η συναλλαγή της ξαναπαίζεται;
+   - `commit_outcome`: η εφαρμογή μαθαίνει αν το commit της πρόλαβε;
+   - `drain_timeout`: σε προγραμματισμένη στάση, οι συνδέσεις μεταφέρονται ήσυχα;
+   - FAN (ONS): ειδοποιήσεις για τα pools των εφαρμογών.
+5. Στο τέλος: τα αντικείμενα, όσα είναι invalid (πρέπει να μην υπάρχει κανένα), τα μοντέλα του AI, οι λογαριασμοί, και το connect
+   string για εφαρμογές:
+
+```
+jdbc:oracle:thin:@(DESCRIPTION=(CONNECT_TIMEOUT=5)(TRANSPORT_CONNECT_TIMEOUT=3)(RETRY_COUNT=20)(RETRY_DELAY=3)(ADDRESS=(PROTOCOL=TCP)(HOST=192.168.178.235)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=bank_rac)))
+```
+
+Για τον βοηθό AI πάνω στο RAC, πρόσθεσε τις .231 και .232 στον κανόνα του firewall των Windows για το Ollama.
+Σε PowerShell ως Administrator:
+`Set-NetFirewallRule -DisplayName "Ollama bank DG" -RemoteAddress 192.168.178.221,192.168.178.222,192.168.178.231,192.168.178.232`.
+
+Επόμενο βήμα: το bk-api με Application Continuity (pool με replay και FAN), και δοκιμή πτώσης κόμβου με συναλλαγές σε εξέλιξη.

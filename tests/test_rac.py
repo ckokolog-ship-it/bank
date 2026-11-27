@@ -81,3 +81,16 @@ def test_rac_db():
     assert not re.search(r'-(sys|system|pdbAdmin)Password', s)
     # root.sh: rac1 first, then rac2
     assert s.index('"$DB_HOME/root.sh"') < s.index('sudo $DB_HOME/root.sh')
+
+
+def test_the_bank_on_rac():
+    e, b = text('db1_export.sh'), text('rac_bank.sh')
+    assert 'PRIMARY' in e and 'schemas=BANK' in e and 'flashback_time' in e
+    assert 'rac1) ;;' in b and 'cluster=n' in b and 'impdp system@//rac1.home.lan:1521/bankpdb' in b
+    for want in ('dbms_crypto', 'bk_models', 'bk_docs', 'append_host_ace', 'compile_schema'):
+        assert want in b, want
+    # the service: both instances, Transparent Application Continuity
+    for want in ('-service bank_rac', '-preferred ${DB}1,${DB}2', '-failovertype AUTO', '-commit_outcome TRUE',
+                 '-notification TRUE', '-drain_timeout'):
+        assert want in b, want
+    assert not re.search(r'(?i)(system|bank)/\S', e + b)
