@@ -86,7 +86,7 @@ def test_rac_db():
 def test_the_bank_on_rac():
     e, b = text('db1_export.sh'), text('rac_bank.sh')
     assert 'PRIMARY' in e and 'schemas=BANK' in e and 'flashback_time' in e
-    assert 'rac1) ;;' in b and 'cluster=n' in b and 'impdp system@//rac1.home.lan:1521/bankpdb' in b
+    assert 'rac1) ;;' in b and 'cluster=n' in b and 'impdp system@BANKPDB_RAC1' in b and 'SERVICE_NAME = bankpdb' in b
     for want in ('dbms_crypto', 'bk_models', 'bk_docs', 'append_host_ace', 'compile_schema'):
         assert want in b, want
     # the service: both instances, Transparent Application Continuity
