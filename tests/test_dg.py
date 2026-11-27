@@ -170,5 +170,7 @@ def test_a_pdb_for_another_application():
     assert 'create pluggable database %s admin user %sadmin identified by' in s and 'save state' in s
     assert "mk('${PFX}_rw')" in s and "mk('${PFX}_ro')" in s and 'after startup on database' in s
     assert "if r = 'PRIMARY' then" in s and 'PRIMARY' in s and 'BANKPDB is the bank' in s
+    # a PDB from the seed has no USERS
+    assert 'create tablespace users' in s and 'default tablespace users' in s
     # the password: asked, through stdin, never an argument
     assert 'read -rsp' in s and not re.search(r'sqlplus[^|\n]*identified by', s)

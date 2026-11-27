@@ -42,6 +42,8 @@ if [ "$(q "select count(*) from v\$pdbs where name = '$PDB';")" = 0 ]; then
   unset P1 P2
 fi
 printf 'whenever sqlerror continue\nset feedback off\nalter pluggable database %s open;\nalter pluggable database %s save state;\n' "$PDB" "$PDB" | sqlsys >/dev/null 2>&1 || true
+# a PDB from the seed has no USERS: the default tablespace of the users of an application
+printf "whenever sqlerror exit failure\nset feedback off\nalter session set container = %s;\ndeclare n number; begin select count(*) into n from dba_tablespaces where tablespace_name = 'USERS'; if n = 0 then execute immediate 'create tablespace users datafile size 100m autoextend on next 100m maxsize 10g'; execute immediate 'alter database default tablespace users'; end if; end;\n/\n" "$PDB" | sqlsys
 
 echo "== 3. the services ${PFX}_rw, ${PFX}_ro and their trigger"
 sqlsys <<SQL
