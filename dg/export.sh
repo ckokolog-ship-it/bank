@@ -30,7 +30,11 @@ SQL
 
 echo "== expdp of BANK (the password of SYSTEM)"
 set +e
-expdp "system@//localhost:1521/$PDB" schemas=BANK directory=BK_DP dumpfile=bank.dmp logfile=bank_exp.log \
+# (an alias, not //host:port/service: Data Pump splits user/password at its slashes, UDE-00002 whatever the
+# password; its own tnsnames.ora: the TNS_ADMIN of the Forms domain untouched)
+mkdir -p "$DP/tns"
+printf '%s_DP = (DESCRIPTION = (ADDRESS = (PROTOCOL = TCP)(HOST = localhost)(PORT = 1521))\n  (CONNECT_DATA = (SERVICE_NAME = %s)))\n' "$PDB" "$PDB" > "$DP/tns/tnsnames.ora"
+TNS_ADMIN=$DP/tns expdp "system@${PDB}_DP" schemas=BANK directory=BK_DP dumpfile=bank.dmp logfile=bank_exp.log \
   flashback_time=systimestamp exclude=statistics
 rc=$?
 set -e

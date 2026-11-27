@@ -94,3 +94,11 @@ def test_the_bank_on_rac():
                  '-notification TRUE', '-drain_timeout'):
         assert want in b, want
     assert not re.search(r'(?i)(system|bank)/\S', e + b)
+
+
+def test_data_pump_by_an_alias():
+    # Data Pump split system@//host:port/service at its slashes: UDI-00002 whatever the password
+    for path in ('rac_bank.sh', os.path.join('..', 'dg', 'export.sh'), os.path.join('..', 'dg', 'import.sh'),
+                 'db1_export.sh'):
+        s = text(path)
+        assert not re.search(r'(exp|imp)dp\s+"?system@//', s), path
