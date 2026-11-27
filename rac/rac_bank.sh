@@ -61,7 +61,12 @@ fi
 echo "== 2. impdp into BANKPDB (the password of SYSTEM of $DB)"
 printf "alter session set container = BANKPDB;\ncreate or replace directory bk_dp as '%s';\n" "$DP" | sqlsys >/dev/null
 set +e
-D "impdp system@//rac1.home.lan:1521/bankpdb directory=BK_DP dumpfile=bank_rac.dmp logfile=bank_rac_imp.log cluster=n"
+# (an alias, not //host:port/service: Data Pump splits user/password at the slashes of it, UDI-00002 whatever the
+# password; its own tnsnames.ora, the network files of the database untouched)
+mkdir -p "$DP/tns"
+printf 'BANKPDB_RAC1 = (DESCRIPTION = (ADDRESS = (PROTOCOL = TCP)(HOST = rac1.home.lan)(PORT = 1521))\n  (CONNECT_DATA = (SERVICE_NAME = bankpdb)))\n' > "$DP/tns/tnsnames.ora"
+chown -R oracle:oinstall "$DP/tns"
+D "TNS_ADMIN=$DP/tns impdp system@BANKPDB_RAC1 directory=BK_DP dumpfile=bank_rac.dmp logfile=bank_rac_imp.log cluster=n"
 rc=$?
 set -e
 # (5: done, with warnings: the packages of the login before DBMS_CRYPTO; compiled below)
