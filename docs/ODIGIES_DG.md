@@ -531,4 +531,40 @@ sudo ~/bank-k8s/deploy.sh <tag>
    sudo BK_DB_URL=jdbc:oracle:thin:@//192.168.178.200:1521/FREEPDB1 ~/bank-k8s/deploy.sh <tag>
    ```
 
+## 13. Ένα PDB για άλλη εφαρμογή (PROPOPDB)
+
+Μια δεύτερη εφαρμογή μπαίνει στη **ίδια** CDB με την τράπεζα, αλλά σε **δικό της PDB**. Έτσι παίρνει την ίδια προστασία
+(redo στον db2, Active Data Guard, Fast-Start Failover) χωρίς να ανακατεύεται με το `BANKPDB`.
+
+Από το forms1 (ως oracle):
+
+```bash
+cd ~/bank && git pull
+scp dg/pdb.sh chris@192.168.178.221:
+```
+
+Στον **db1** (τον primary):
+
+```bash
+sudo bash ~/pdb.sh PROPOPDB propo
+```
+
+1. **Το PDB `PROPOPDB`** φτιάχνεται από το seed, με τον διαχειριστή του `propoadmin`. Ο κωδικός ζητείται χωρίς να φαίνεται και
+   δεν γράφεται πουθενά. Ανοίγει μαζί με τη CDB (`save state`).
+2. Στον **db2** έρχεται **μόνο του** με το redo και ανοίγει READ ONLY (Active Data Guard).
+3. **Οι υπηρεσίες:**
+   - `propo_rw` τρέχει μόνο στον primary, για τις εγγραφές;
+   - `propo_ro` τρέχει στον standby, και στον primary ως εφεδρεία, για τις αναγνώσεις.
+
+   Τις ξεκινά ένα trigger ανάλογα με τον ρόλο, όπως στην τράπεζα.
+4. **Το `tnsnames.ora` του db1:** το όνομα `PROPOPDB` δείχνει στην `propo_rw`, στους db1 και db2.
+
+Οι εφαρμογές συνδέονται έτσι:
+
+```
+jdbc:oracle:thin:@(DESCRIPTION=(CONNECT_TIMEOUT=5)(TRANSPORT_CONNECT_TIMEOUT=3)(RETRY_COUNT=20)(RETRY_DELAY=3)(ADDRESS_LIST=(LOAD_BALANCE=off)(FAILOVER=on)(ADDRESS=(PROTOCOL=TCP)(HOST=192.168.178.221)(PORT=1521))(ADDRESS=(PROTOCOL=TCP)(HOST=192.168.178.222)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=propo_rw)))
+```
+
+Ο χρήστης και οι πίνακες της εφαρμογής φτιάχνονται από τα δικά της scripts (PROPOApplication, `db/`).
+
 Επόμενο βήμα: δοκιμή failover με τις εφαρμογές ανοιχτές.

@@ -163,3 +163,12 @@ def test_apps_forms_replaces_only_its_entry(tmp_path):
                  'FREEPDB1)))\nX = (DESCRIPTION = (CONNECT_DATA = (SID = Y)))\n')
     out = subprocess.run(['awk', '-v', 'a=BK_DB', prog, str(t)], capture_output=True, text=True, check=True).stdout
     assert 'BK_DB' not in out and 'MM_DB =' in out and 'X = (DESCRIPTION' in out and out.count('FREEPDB1') == 1
+
+
+def test_a_pdb_for_another_application():
+    s = text('pdb.sh')
+    assert 'create pluggable database %s admin user %sadmin identified by' in s and 'save state' in s
+    assert "mk('${PFX}_rw')" in s and "mk('${PFX}_ro')" in s and 'after startup on database' in s
+    assert "if r = 'PRIMARY' then" in s and 'PRIMARY' in s and 'BANKPDB is the bank' in s
+    # the password: asked, through stdin, never an argument
+    assert 'read -rsp' in s and not re.search(r'sqlplus[^|\n]*identified by', s)
