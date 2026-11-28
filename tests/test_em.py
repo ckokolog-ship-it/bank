@@ -57,7 +57,11 @@ def test_em_oms():
     # the passwords: read -s, in a temporary file of 600 deleted at the end, never in the repo
     assert 'read -rsp' in s and 'chmod 600 "$RSP"' in s and 'shred -u "$RSP"' in s and 'trap' in s
     assert 'unset P_SYS P_SYSMAN P_WLS P_NM P_AGENT' in s
+    # each password checked as it is given (asked again), SYS as dbca made it and tried on EMREP at once
+    assert 'continue' in s and 'if [ "$1" = P_SYS ]' in s and "select 'SYS-OK' from dual" in s and 'sqlplus -s /nolog' in s
     assert not re.search(r'(?i)(PASSWORD)=[A-Za-z0-9]', s), 'no password written in the script'
+    # unzipped as root, then given to oracle: the zips may be in a home closed to oracle (700)
+    assert 'runuser -u oracle -- unzip' not in s and 'chown -R oracle:oinstall "$STAGE"' in s
     assert 'DEPLOYMENT_SIZE SMALL' in s and 'SERVICENAME_OR_SID EMREP' in s and 'allroot.sh' in s
 
 
