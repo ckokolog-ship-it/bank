@@ -135,6 +135,13 @@ setk b_upgrade false
 setk EM_INSTALL_TYPE NOSEED
 setk CONFIGURATION_TYPE ADVANCED
 unset P_SYS P_SYSMAN P_WLS P_NM P_AGENT
+# what the template leaves as a place to fill (KEY=<string>, KEY=<true/false>, ...) and we did not fill: optional
+# (e.g. STATIC_PORTS_FILE): commented out, never given to the installer as a value -- and said
+LEFT=$(grep -E '^[A-Za-z_][A-Za-z0-9_.]*=[[:space:]]*"?<[^>]*>' "$RSP" | cut -d= -f1 | tr '\n' ' ' || true)
+sed -i -E 's/^([A-Za-z_][A-Za-z0-9_.]*=[[:space:]]*"?<[^>]*>.*)$/#\1/' "$RSP"
+[ -n "$LEFT" ] && echo "   (left out, places of the template not filled: $LEFT)"
+# the keys given to the installer (their names only)
+echo "   (the keys: $(grep -E '^[A-Za-z_][A-Za-z0-9_.]*=' "$RSP" | cut -d= -f1 | tr '\n' ' '))"
 if [ ${#MISSING[@]} -gt 0 ]; then
   echo "   (not in the template of 24ai, added: ${MISSING[*]})"
 fi
