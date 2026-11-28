@@ -35,10 +35,12 @@ install -d -o oracle -g oinstall -m 755 "$STAGE"
 if [ ! -x "$STAGE/em24100_linux64.bin" ]; then
   HOMEFREE=$(df -BG --output=avail "$STAGE" | tail -1 | tr -dc 0-9)
   [ "$HOMEFREE" -ge 12 ] || die "$STAGE has ${HOMEFREE} GB free: 12 at least"
+  # as root (the zips may be in a home closed to oracle: 700 in Oracle Linux 9), then given to oracle
   for z in "$SRC"/V10469*.zip; do
     echo "   unzip $(basename "$z")"
-    runuser -u oracle -- unzip -q -o "$z" -d "$STAGE"
+    unzip -q -o "$z" -d "$STAGE"
   done
+  chown -R oracle:oinstall "$STAGE"
   chmod +x "$STAGE"/em24100_linux64.bin
 fi
 [ -x "$STAGE/em24100_linux64.bin" ] || die "no em24100_linux64.bin after the unzip (its files: $(ls "$STAGE" | tr '\n' ' '))"
