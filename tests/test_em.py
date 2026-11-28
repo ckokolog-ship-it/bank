@@ -62,6 +62,8 @@ def test_em_oms():
     assert not re.search(r'(?i)(PASSWORD)=[A-Za-z0-9]', s), 'no password written in the script'
     # unzipped as root, then given to oracle: the zips may be in a home closed to oracle (700)
     assert 'runuser -u oracle -- unzip' not in s and 'chown -R oracle:oinstall "$STAGE"' in s
+    # the places of the template not filled (STATIC_PORTS_FILE=<string>): commented out and said
+    assert 's/^([A-Za-z_][A-Za-z0-9_.]*=[[:space:]]*"?<[^>]*>.*)$/#\\1/' in s and 'left out, places of the template' in s
     assert 'DEPLOYMENT_SIZE SMALL' in s and 'SERVICENAME_OR_SID EMREP' in s and 'allroot.sh' in s
 
 
