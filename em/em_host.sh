@@ -76,11 +76,15 @@ id oracle >/dev/null || die "no user oracle after the package"
 
 echo "== swap: 8 GB at least (the installer of EM checks it)"
 SWAPMB=$(free -m | awk '/^Swap:/ {print $2}')
-if [ "${SWAPMB:-0}" -lt 8000 ] && [ ! -f /swapfile ]; then
-  dd if=/dev/zero of=/swapfile bs=1M count=8192 status=none
+if [ "${SWAPMB:-0}" -lt 8000 ]; then
+  # each step on its own (again after a stop: a file made but not yet swap)
+  if [ ! -f /swapfile ] || [ "$(stat -c %s /swapfile)" -lt 8589934592 ]; then
+    dd if=/dev/zero of=/swapfile bs=1M count=8192 status=none
+  fi
   chmod 600 /swapfile
-  mkswap -q /swapfile
-  swapon /swapfile
+  # (mkswap of Oracle Linux 9 has no -q)
+  blkid -t TYPE=swap /swapfile >/dev/null 2>&1 || mkswap /swapfile >/dev/null
+  swapon --show=NAME --noheadings | grep -qx /swapfile || swapon /swapfile
   grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap defaults 0 0' >> /etc/fstab
 fi
 
