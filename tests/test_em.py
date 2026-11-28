@@ -72,8 +72,22 @@ def test_em_oms():
     assert 'DEPLOYMENT_SIZE SMALL' in s and 'SERVICENAME_OR_SID EMREP' in s and 'allroot.sh' in s
 
 
+def test_em_agent():
+    s = text('em_agent.sh')
+    assert 'set -euo pipefail' in s and 'die "as root' in s
+    assert 'db1|db2|rac1|rac2|forms1) ;;' in s
+    assert '192.168.178.236' in s and 'em/install/getAgentImage' in s and 'AgentPull.sh' in s and 'RSPFILE_LOC' in s
+    # the port of the agent for em1 only
+    assert 'source address=$EM_IP port port=$AGENT_PORT' in s
+    # the passwords: read -s, in a temporary file of 600 deleted at the end
+    assert 'read -rsp' in s and 'install -o "$OWNER" -m 600 /dev/null "$RSP"' in s and 'shred -u "$RSP"' in s
+    assert 'unset P_SYSMAN P_REG' in s and not re.search(r'(?i)PASSWORD=[A-Za-z0-9]', s)
+    assert 'root.sh' in s and 'emctl status agent' in s
+
+
 def test_the_guide():
     with open(os.path.join(EM, '..', 'docs', 'ODIGIES_EM.md'), encoding='utf-8') as f:
         g = f.read()
     assert 'em_host.sh' in g and 'em_oms.sh' in g and '7803/em' in g and 'tmux' in g
     assert 'LINUX.X64_2326100_db_home.zip' in g, 'the way out when 19c does not install on OL9'
+    assert 'em_agent.sh' in g and 'Data Guard Administration' in g and 'password dbsnmp' in g and 'BANKRAC' in g

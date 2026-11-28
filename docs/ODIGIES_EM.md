@@ -15,7 +15,7 @@
 Τα βήματα, ένα PR για καθένα:
 
 1. **Το VM, η βάση του repository, ο Enterprise Manager** (αυτός ο οδηγός, §1–§3: `em/em_host.sh`, `em/em_oms.sh`).
-2. Οι agents στα db1, db2, rac1, rac2, forms1 και η ανακάλυψη του Data Guard και του RAC.
+2. Οι agents στα db1, db2, rac1, rac2, forms1 και η ανακάλυψη του Data Guard και του RAC (§4–§5).
 
 ## 0. Τα αρχεία (i9)
 
@@ -103,13 +103,78 @@ sudo bash ~/em_oms.sh ~/em
 έμπιστο (είναι του ίδιου του EM): Advanced → Continue. Στο PC, για το όνομα em1.home.lan:
 `C:\Windows\System32\drivers\etc\hosts` → `192.168.178.236 em1.home.lan em1` (ή η IP απευθείας).
 
+## 4. Οι agents (db1, db2, rac1, rac2, forms1)
+
+Κάθε μηχάνημα **κατεβάζει μόνο του** τον agent από το em1 (AgentPull του EM): ο EM δεν χρειάζεται ssh σε αυτό.
+
+Από το **forms1** (ως oracle) το script σε όλα:
+
+```bash
+cd ~/bank && git pull
+for h in 192.168.178.221 192.168.178.222 192.168.178.231 192.168.178.232; do scp em/em_agent.sh chris@$h: ; done
+cp em/em_agent.sh /tmp/ && chmod 644 /tmp/em_agent.sh      # για το ίδιο το forms1
+```
+
+Σε **κάθε** μηχάνημα, ως chris (στο forms1: `sudo bash /tmp/em_agent.sh`):
+
+```bash
+sudo bash ~/em_agent.sh
+```
+
+- Βάζει το em1 στο `/etc/hosts` και ανοίγει τη θύρα του agent (3872) μόνο για το em1.
+- Ζητά δύο κωδικούς (δεν φαίνονται): τον **SYSMAN** (για να κατέβει ο agent) και της **εγγραφής των agents** (αυτόν
+  του `em_oms.sh`). Μπαίνουν μόνο σε προσωρινό αρχείο όσο τρέχει το AgentPull.sh και μετά σβήνονται.
+- Ο agent πάει στο `/u01/app/oracle/agent`, ως oracle, μετά το `root.sh` του (ξεκινά μαζί με το μηχάνημα).
+- Στο τέλος δείχνει το `emctl status agent`: πρέπει να λέει «Agent is Running and Ready».
+
+Στην κονσόλα: **Setup → Manage Cloud Control → Agents**: ένας agent ανά μηχάνημα, πράσινος.
+
+## 5. Οι βάσεις, το Data Guard, το RAC (κονσόλα)
+
+**Πρώτα ο χρήστης παρακολούθησης DBSNMP** (κλειδωμένος από την εγκατάσταση). Στο **db1** (ο primary· στο db2 πηγαίνει
+μόνο του με το redo) και στο **rac1**, ως oracle, στην CDB:
+
+```bash
+sqlplus / as sysdba
+```
+```sql
+alter user dbsnmp account unlock;
+password dbsnmp
+exit
+```
+
+Το `password` ζητά τον νέο κωδικό χωρίς να φαίνεται. Ένας για όλες τις βάσεις του εργαστηρίου.
+
+**Οι βάσεις του Data Guard.** Setup → Add Target → **Add Targets Manually** → **Add Using Guided Process** →
+**Oracle Database, Listener and Automatic Storage Management** → Host: `db1.home.lan` → Next:
+
+- βρίσκει την CDB BANK, τα PDB της και τον listener· τσέκαρέ τα·
+- Monitor Username `dbsnmp`, ο κωδικός του, **Test Connection** → Next → **Save**.
+
+Το ίδιο για το `db2.home.lan`. Για το db2 (standby, ανοιχτό read only): αν πει ότι χρειάζεται SYSDBA, Monitor Username
+`sys`, Role **SYSDBA**.
+
+Μετά: Targets → Databases → **BANK** (στο db1) → menu **Availability → Data Guard Administration**: ο primary, ο
+standby, η καθυστέρηση (transport/apply lag), η κατάσταση του FSFO και του observer, και τα κουμπιά **Switchover** και
+**Failover**.
+
+**Το RAC.** Πρώτα το cluster: Add Using Guided Process → **Oracle Cluster and High Availability Service** → Host:
+`rac1.home.lan` → βρίσκει το cluster και τους δύο κόμβους → Save. Μετά η βάση: **Oracle Database, Listener and
+Automatic Storage Management** → Host: `rac1.home.lan` → βρίσκει την **Cluster Database BANKRAC** (και τα instances
+BANKRAC1/BANKRAC2, το ASM, τους listeners και τα SCAN listeners) → dbsnmp → Save.
+
+Μετά: Targets → Databases → **BANKRAC**: τα δύο instances, η φόρτωση ανά κόμβο, τα services (`bank_rac`), το ASM (+DATA,
++RECO).
+
+**Το forms1:** με τον ίδιο τρόπο η Oracle Free του (FREEPDB1, το mini market): host `forms1.home.lan`.
+
 ## Καθημερινά (em1, ως oracle)
 
 | Εντολή | |
 |---|---|
 | `/u01/app/oracle/middleware/bin/emctl status oms` | ζει ο EM; |
 | `/u01/app/oracle/middleware/bin/emctl stop oms -all` / `start oms` | σταμάτημα / ξεκίνημα |
-| `/u01/app/oracle/agent/agent_inst/bin/emctl status agent` | ο agent του ίδιου του em1 |
+| `/u01/app/oracle/agent/agent_inst/bin/emctl status agent` | ο agent (στο em1 και σε κάθε μηχάνημα του §4) |
 | `sudo systemctl status oracle-em` | η βάση του repository |
 
 Η σειρά στο κλείσιμο: πρώτα ο EM (`emctl stop oms -all`), μετά η βάση· στο άνοιγμα ανάποδα (γίνεται μόνο του).
