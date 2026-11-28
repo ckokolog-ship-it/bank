@@ -60,24 +60,35 @@ if [ ! -f "$TPL/new_install.rsp" ]; then
 fi
 [ -f "$TPL/new_install.rsp" ] || die "no new_install.rsp among the templates: $(ls "$TPL" | tr '\n' ' ')"
 
-ask() { # the variable, the question: asked twice, not shown, not empty
+ask() { # the variable, the question: asked twice, not shown, not empty -- again until it is right
   local a b
-  read -rsp "$2: " a; echo
-  read -rsp "   ξανά: " b; echo
-  [ -n "$a" ] && [ "$a" = "$b" ] || die "empty, or not the same"
-  printf -v "$1" '%s' "$a"
+  while true; do
+    read -rsp "$2: " a; echo
+    read -rsp "   ξανά: " b; echo
+    if [ -z "$a" ] || [ "$a" != "$b" ]; then echo "   κενός, ή όχι ο ίδιος: ξανά"; continue; fi
+    if [ "$1" = P_SYS ]; then
+      # (it exists already, made in dbca: only what breaks a response file)
+      [[ $a =~ [[:space:]\"] ]] && { echo "   ο SYS με κενό ή \": άλλαξέ τον πρώτα (docs/ODIGIES_EM.md §3)"; exit 1; }
+    elif ! [[ $a =~ ^[A-Za-z][A-Za-z0-9_#]{7,29}$ ]]; then
+      echo "   8-30 χαρακτήρες, από γράμμα, μόνο γράμματα, ψηφία, _ #: ξανά"; continue
+    elif ! [[ $a =~ [A-Z] && $a =~ [a-z] && $a =~ [0-9] ]]; then
+      echo "   χρειάζεται κεφαλαίο, μικρό γράμμα και ψηφίο: ξανά"; continue
+    fi
+    printf -v "$1" '%s' "$a"
+    return
+  done
 }
-echo "   Οι κωδικοί (δεν φαίνονται· 8+ χαρακτήρες, από γράμμα, με κεφαλαίο, μικρό και ψηφίο· μόνο γράμματα, ψηφία, _ #):"
-ask P_SYS "SYS της βάσης EMCDB (αυτός του dbca)"
+echo "   Οι νέοι κωδικοί (δεν φαίνονται· 8+ χαρακτήρες, από γράμμα, με κεφαλαίο, μικρό και ψηφίο· μόνο γράμματα, ψηφία, _ #):"
+ask P_SYS "SYS της βάσης EMCDB (αυτός του dbca, όπως είναι)"
+# SYS checked now on the repository (the password through stdin, not in the arguments): not after an hour
+SYSOK=$(printf 'connect sys/"%s"@//localhost:1521/EMREP as sysdba\nset heading off feedback off\nselect 'SYS-OK' from dual;\nexit\n' "$P_SYS" \
+  | runuser -l oracle -c "sqlplus -s /nolog" 2>&1 || true)
+grep -q 'SYS-OK' <<<"$SYSOK" || die "ο SYS δεν συνδέεται στο EMREP: λάθος κωδικός; ($(grep -m1 -o 'ORA-[0-9]*' <<<"$SYSOK" || echo '?'))"
+echo "   (ο SYS συνδέθηκε στο EMREP)"
 ask P_SYSMAN "SYSMAN (ο χρήστης της κονσόλας του EM)"
 ask P_WLS "weblogic του EM (καινούργιος)"
 ask P_NM "node manager του EM (καινούργιος)"
-ask P_AGENT "εγγραφή των agents"
-for v in "$P_SYS" "$P_SYSMAN" "$P_WLS" "$P_NM" "$P_AGENT"; do
-  [[ $v =~ ^[A-Za-z][A-Za-z0-9_#]{7,29}$ ]] || die "a password: 8-30 letters, digits, _ or #, starting with a letter"
-  # (SYSMAN and weblogic of EM: a capital, a small letter and a digit)
-  [[ $v =~ [A-Z] && $v =~ [a-z] && $v =~ [0-9] ]] || die "a password: at least one capital, one small letter, one digit"
-done
+ask P_AGENT "εγγραφή των agents (καινούργιος)"
 
 RSP=$(runuser -u oracle -- mktemp /home/oracle/em-new_install-XXXXXX.rsp)
 chmod 600 "$RSP"
