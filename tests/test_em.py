@@ -39,6 +39,8 @@ def test_em_host():
     # dbca asks the passwords: never in the script or on its command line
     assert '-sysPassword' not in s and '-systemPassword' not in s and '-pdbAdminPassword' not in s
     assert 'oracle-em.service' in s and 'save state' in s
+    # mkswap of Oracle Linux 9 has no -q; each step of the swap again after a stop
+    assert 'mkswap -q' not in s and 'blkid -t TYPE=swap /swapfile' in s and 'swapon --show' in s
 
 
 def test_em_oms():
