@@ -102,7 +102,10 @@ chown -R oracle:oinstall /u01
 chmod -R 775 /u01
 
 echo "== 2. the software of the database ($VER) in $ORACLE_HOME"
-if [ ! -x "$ORACLE_HOME/bin/oracle" ]; then
+# installed = the home in the inventory of Oracle (root.sh done): not a file of it -- the zip of 26ai is an image
+# that has bin/oracle before any install
+installed() { grep -qs "LOC=\"$ORACLE_HOME\"" "$INVENTORY/ContentsXML/inventory.xml" && [ -f /etc/oratab ]; }
+if ! installed; then
   if [ ! -x "$ORACLE_HOME/runInstaller" ]; then
     echo "   unzip (some minutes)"
     install -o oracle -g oinstall -m 644 "$ZIP" /u01/app/db_home.zip
@@ -156,7 +159,7 @@ if [ ! -x "$ORACLE_HOME/bin/oracle" ]; then
   [ -x "$INVENTORY/orainstRoot.sh" ] && "$INVENTORY/orainstRoot.sh" >/dev/null
   "$ORACLE_HOME/root.sh" >/dev/null
 fi
-[ -x "$ORACLE_HOME/bin/oracle" ] || die "no $ORACLE_HOME/bin/oracle after runInstaller"
+installed || die "$ORACLE_HOME not in the inventory after runInstaller (its log: $INVENTORY/logs/)"
 
 echo "== the environment of oracle"
 P=/home/oracle/.bash_profile
@@ -176,7 +179,7 @@ if ! O "lsnrctl status" >/dev/null 2>&1; then
 fi
 
 echo "== the database of the repository: $CDB, its PDB $PDB (dbca: some 20-40 minutes)"
-if ! grep -q "^$CDB:" /etc/oratab; then
+if ! grep -qs "^$CDB:" /etc/oratab; then
   echo "   dbca asks the passwords: SYS, SYSTEM, the admin of the PDB (strong; no @, no \"). Keep the one of SYS:"
   echo "   em_oms.sh asks it again."
   PARAMS="processes=600,open_cursors=300,session_cached_cursors=200,job_queue_processes=20,db_files=400"
