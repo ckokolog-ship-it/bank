@@ -183,12 +183,14 @@ if ! grep -qs "^$CDB:" /etc/oratab; then
   echo "   dbca asks the passwords: SYS, SYSTEM, the admin of the PDB (strong; no @, no \"). Keep the one of SYS:"
   echo "   em_oms.sh asks it again."
   PARAMS="processes=600,open_cursors=300,session_cached_cursors=200,job_queue_processes=20,db_files=400"
-  # (19c: EM asks for it; the later versions do not need it)
-  [ "$VER" = 19c ] && PARAMS="$PARAMS,_allow_insert_with_update_check=TRUE"
+  # the memory EM checks (sga_target 3 GB, shared pool 600 MB, pga 1 GB), and _allow_insert_with_update_check:
+  # EM 24ai wants it TRUE on 26ai too
+  PARAMS="$PARAMS,sga_max_size=3584M,sga_target=3584M,shared_pool_size=768M,pga_aggregate_target=1G"
+  PARAMS="$PARAMS,_allow_insert_with_update_check=TRUE"
   O "dbca -silent -createDatabase -templateName General_Purpose.dbc -gdbName $CDB -sid $CDB \
       -createAsContainerDatabase true -numberOfPDBs 1 -pdbName $PDB -characterSet AL32UTF8 -nationalCharacterSet AL16UTF16 \
       -storageType FS -datafileDestination $ORACLE_BASE/oradata -redoLogFileSize 1024 -memoryMgmtType AUTO_SGA \
-      -totalMemory 5120 -emConfiguration NONE -initParams $PARAMS" \
+      -emConfiguration NONE -initParams $PARAMS" \
     || die "dbca failed (its log: $ORACLE_BASE/cfgtoollogs/dbca/$CDB/)"
 fi
 O "sqlplus -s / as sysdba" <<'SQL'
@@ -197,6 +199,31 @@ alter pluggable database all open;
 alter pluggable database all save state;
 exit
 SQL
+# a database of before (an em_host.sh of before): the same parameters, and a restart only when they changed
+CHANGED=$(O "sqlplus -s / as sysdba" <<'SQL'
+set heading off feedback off
+select count(*) from v$parameter
+ where (name = 'sga_target' and value < 3500000000) or (name = 'shared_pool_size' and value < 600000000)
+    or (name = 'pga_aggregate_target' and value < 1000000000)
+    or (name = '_allow_insert_with_update_check' and upper(value) <> 'TRUE');
+select decode(count(*), 0, 1, 0) from v$parameter where name = '_allow_insert_with_update_check';
+exit
+SQL
+)
+if [ "$(echo "$CHANGED" | tr -dc 0-9 | sed 's/^0*//')" != "" ]; then
+  echo "   the parameters EM checks: set, and the database restarted"
+  O "sqlplus -s / as sysdba" <<'SQL'
+whenever sqlerror exit failure
+alter system set "_allow_insert_with_update_check"=TRUE scope=spfile;
+alter system set sga_max_size=3584M scope=spfile;
+alter system set sga_target=3584M scope=spfile;
+alter system set shared_pool_size=768M scope=spfile;
+alter system set pga_aggregate_target=1G scope=spfile;
+shutdown immediate
+startup
+exit
+SQL
+fi
 
 echo "== started with the VM: /etc/oratab Y, the unit oracle-em (the listener, then the database)"
 sed -i "s|^$CDB:\(.*\):[NY]\$|$CDB:\1:Y|" /etc/oratab

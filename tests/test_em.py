@@ -39,6 +39,10 @@ def test_em_host():
     # dbca asks the passwords: never in the script or on its command line
     assert '-sysPassword' not in s and '-systemPassword' not in s and '-pdbAdminPassword' not in s
     assert 'oracle-em.service' in s and 'save state' in s
+    # what the prerequisites of EM 24ai check, on 19c and 26ai alike, also on a database of before
+    assert 'PARAMS="$PARAMS,_allow_insert_with_update_check=TRUE"' in s and '[ "$VER" = 19c ] && PARAMS' not in s
+    assert 'sga_target=3584M' in s and 'shared_pool_size=768M' in s and 'pga_aggregate_target=1G' in s
+    assert 'shutdown immediate' in s
     # mkswap of Oracle Linux 9 has no -q; each step of the swap again after a stop
     # an inventory of an install that stopped (INS-32035): moved aside, never one that has homes
     assert '[ ! -f /etc/oraInst.loc ]' in s and 'ContentsXML/inventory.xml' in s and 'oraInventory.failed-' in s
@@ -64,6 +68,7 @@ def test_em_oms():
     assert 'runuser -u oracle -- unzip' not in s and 'chown -R oracle:oinstall "$STAGE"' in s
     # the places of the template not filled (STATIC_PORTS_FILE=<string>): commented out and said
     assert 's/^([A-Za-z_][A-Za-z0-9_.]*=[[:space:]]*"?<[^>]*>.*)$/#\\1/' in s and 'left out, places of the template' in s
+    assert '!$done &&' in s, 'a key of the template more than once: the first line only'
     assert 'DEPLOYMENT_SIZE SMALL' in s and 'SERVICENAME_OR_SID EMREP' in s and 'allroot.sh' in s
 
 
