@@ -142,7 +142,10 @@ def test_local_listener_by_address():
 
 def test_the_applications_to_bank_rw():
     a = text('apps_forms.sh')
-    assert 'SERVICE_NAME = bank_rw' in a and '192.168.178.221' in a and '192.168.178.222' in a
+    assert 'SERVICE_NAME = $SERVICE' in a and 'SERVICE=${SERVICE:-bank_rw}' in a and 'ALIAS=${ALIAS:-BK_DB}' in a
+    assert '192.168.178.221' in a and '192.168.178.222' in a
+    # another application (the mini market) with its own alias, service and table of the check
+    assert 'ALIAS=MM_DB SERVICE=mm_rw CHECK=mm_item' in a and 'from $CHECK' in a
     assert '.bak' in a and 'RETRY_COUNT' in a and 'PRIMARY' in a
     with open(os.path.join(DG, '..', 'k8s', 'deploy.sh'), encoding='utf-8') as f:
         d = f.read()
@@ -174,3 +177,16 @@ def test_a_pdb_for_another_application():
     assert 'create tablespace users' in s and 'default tablespace users' in s
     # the password: asked, through stdin, never an argument
     assert 'read -rsp' in s and not re.search(r'sqlplus[^|\n]*identified by', s)
+
+
+def test_another_schema_to_its_pdb():
+    e = text('schema_export.sh')
+    assert 'forms1*) ;;' in e and 'schemas="$SCHEMA"' in e and 'flashback_time=systimestamp' in e
+    assert 'die "the bank: dg/export.sh' in e and 'TNS_ADMIN=$DP/tns expdp' in e and 'schema_import.sh' in e
+    i = text('schema_import.sh')
+    assert 'database_role' in i and "open_mode = 'READ WRITE'" in i and 'BANKPDB is the bank' in i
+    assert 'impdp system@$PDB' in i and 'drop user $NAME cascade' in i and 'compile_schema' in i
+    # what Data Pump does not carry, for MM: DBMS_CRYPTO (the logins), DATA_PUMP_DIR (the backups)
+    assert 'grant execute on sys.dbms_crypto to mm;' in i and 'grant read, write on directory data_pump_dir to mm;' in i
+    for s in (e, i):
+        assert not re.search(r'(?i)identified by|password=', s), 'the passwords: asked by expdp / impdp only'

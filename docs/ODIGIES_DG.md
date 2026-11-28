@@ -568,3 +568,69 @@ jdbc:oracle:thin:@(DESCRIPTION=(CONNECT_TIMEOUT=5)(TRANSPORT_CONNECT_TIMEOUT=3)(
 Ο χρήστης και οι πίνακες της εφαρμογής φτιάχνονται από τα δικά της scripts (PROPOApplication, `db/`).
 
 Επόμενο βήμα: δοκιμή failover με τις εφαρμογές ανοιχτές.
+
+## 14. Το mini market στο Data Guard (MMPDB)
+
+Το mini market τρέχει σήμερα στην Oracle Free του forms1 (FREEPDB1, χρήστης **MM**). Πηγαίνει στο Data Guard με τον
+ίδιο τρόπο όπως η τράπεζα: δικό του PDB **MMPDB** στον db1, που πηγαίνει μόνο του στον db2 με το redo. Τα Forms, τα
+reports και το `mm-api` συνδέονται όλα μέσω του alias **MM_DB** του domain, οπότε με μία αλλαγή του alias
+μετακινούνται όλα μαζί. Κανένας κωδικός δεν αλλάζει: ο MM έρχεται με τον δικό του κωδικό μέσω του Data Pump, και το
+wallet του domain στο forms1 ταιριάζει ως έχει.
+
+**1. Το PDB (db1, ως chris).** Από το forms1 (ως oracle): `cd ~/bank && git pull && scp dg/pdb.sh chris@192.168.178.221:`.
+Μετά στον db1:
+
+```bash
+sudo bash ~/pdb.sh MMPDB mm
+```
+
+Ζητά τον κωδικό του `mmadmin` (ο διαχειριστής του PDB· όχι ο MM). Φτιάχνει τα services **`mm_rw`** (μόνο στον primary)
+και **`mm_ro`** (ο standby), όπως στο §13.
+
+**2. Η τελευταία αντιγραφή (forms1).** Για να μη χαθεί καμία πώληση, **σταμάτησε πρώτα το mini market**: κανείς στα
+ταμεία, και ως chris `sudo systemctl stop mm-api`. Μετά, ως oracle:
+
+```bash
+cd ~/bank && bash dg/schema_export.sh MM
+```
+
+Το expdp ζητά τον κωδικό του **SYSTEM** της Free, και το scp τον κωδικό του chris στον db1.
+
+**3. Η εισαγωγή (db1, ως chris):**
+
+```bash
+sudo bash ~/schema_import.sh MM MMPDB
+```
+
+Το impdp ζητά τον κωδικό του **SYSTEM** της BANK (της CDB του Data Guard). Μετά δίνει στον MM όσα δεν μεταφέρει το Data
+Pump (DBMS_CRYPTO για τα logins, DATA_PUMP_DIR), μεταγλωττίζει και δείχνει τα αντικείμενα. Στα «invalid» πρέπει να μην
+υπάρχει τίποτα.
+
+**4. Το alias MM_DB στο Data Guard (forms1, ως oracle):**
+
+```bash
+cd ~/bank && ALIAS=MM_DB SERVICE=mm_rw CHECK=mm_item bash dg/apps_forms.sh
+```
+
+Κρατά πρώτα αντίγραφο του `tnsnames.ora`, και στο τέλος συνδέεται με `/@MM_DB`: πρέπει να δείξει `db1 PRIMARY` και το
+πλήθος των ειδών (mm_item).
+
+**5. Επανεκκίνηση (forms1, ως chris):**
+
+```bash
+sudo systemctl restart weblogic-forms mm-api
+```
+
+Δοκιμή: τα Forms (`http://forms1.home.lan:9001/forms/frmservlet?config=mm&form=MM_MAIN`), το web και τα ταμεία
+(`http://192.168.178.200:8090/`), και `curl -s http://127.0.0.1:8090/api/health` στο forms1.
+
+**Μετά:**
+
+- Σε failover ή switchover, το mini market πηγαίνει μόνο του στον νέο primary (το `mm_rw` ακολουθεί τον ρόλο).
+- Η FREEPDB1 του forms1 μένει όπως είναι, ως αντίγραφο της στιγμής της μεταφοράς. Μην τη χρησιμοποιείς πια.
+- **Τα αντίγραφα του `db/backup.sh`:** γράφουν με expdp στο DATA_PUMP_DIR της βάσης, που τώρα είναι στον db1, όχι
+  στο forms1. Το script το καταλαβαίνει («no such folder on this computer») και η σελίδα του διευθυντή θα δείξει ότι
+  το αντίγραφο απέτυχε. Τα δεδομένα προστατεύονται από το Data Guard (δύο βάσεις)· τα αντίγραφα θα γίνουν με RMAN
+  στον db1 (επόμενο βήμα).
+- **Πίσω στη Free:** το αντίγραφο `tnsnames.ora.<ώρα>.bak` του domain στη θέση του `tnsnames.ora`, και
+  `sudo systemctl restart weblogic-forms mm-api` (μόνο αν δεν έχουν γίνει πωλήσεις στο Data Guard στο μεταξύ).
