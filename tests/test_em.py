@@ -83,6 +83,8 @@ def test_em_agent():
     assert 'read -rsp' in s and 'install -o "$OWNER" -m 600 /dev/null "$RSP"' in s and 'shred -u "$RSP"' in s
     assert 'unset P_SYSMAN P_REG' in s and not re.search(r'(?i)PASSWORD=[A-Za-z0-9]', s)
     assert 'root.sh' in s and 'emctl status agent' in s
+    # libnsl.so.1 for emdctl; an agent of before that does not run: aside, then again
+    assert 'install curl libnsl' in s and '.failed-$(date' in s
 
 
 def test_the_guide():

@@ -27,10 +27,16 @@ id "$OWNER" >/dev/null 2>&1 || die "no user $OWNER on $H"
 if [ -d /u01/app/oracle ]; then BASE=/u01/app/oracle/agent; else BASE=/home/$OWNER/agent; fi
 O() { runuser -l "$OWNER" -c "$*"; }
 
-if ls -d "$BASE"/agent_inst >/dev/null 2>&1 && [ -x "$BASE/agent_inst/bin/emctl" ]; then
+if [ -x "$BASE/agent_inst/bin/emctl" ] && O "$BASE/agent_inst/bin/emctl status agent" >/dev/null 2>&1; then
   echo "== the agent is on $H already ($BASE): its state"
   O "$BASE/agent_inst/bin/emctl status agent" || true
   exit 0
+fi
+if [ -d "$BASE" ] && [ -n "$(ls -A "$BASE" 2>/dev/null)" ]; then
+  # an agent of before that did not finish its configuration (or does not run): aside, its logs kept
+  OLD="$BASE.failed-$(date +%Y%m%d-%H%M%S)"
+  mv "$BASE" "$OLD"
+  echo "   (an agent that did not finish: moved to $OLD)"
 fi
 
 echo "== $H: the name of em1 ($EM_IP), the port of the agent ($AGENT_PORT) for it"
@@ -40,7 +46,8 @@ if systemctl is-active -q firewalld; then
   firewall-cmd -q --permanent --add-rich-rule="rule family=ipv4 source address=$EM_IP port port=$AGENT_PORT protocol=tcp accept"
   firewall-cmd -q --reload
 fi
-command -v curl >/dev/null || dnf -y -q install curl
+# (the agent: libnsl.so.1 -- not in the prerequisites of 26ai)
+dnf -y -q install curl libnsl >/dev/null
 curl -sk --max-time 10 -o /dev/null "https://$EM:$UPLOAD_PORT/empbs/upload" \
   || die "em1 does not answer on $UPLOAD_PORT: is EM up there? (on em1: emctl status oms)"
 
