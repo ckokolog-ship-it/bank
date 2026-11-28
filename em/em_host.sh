@@ -109,6 +109,15 @@ if [ ! -x "$ORACLE_HOME/bin/oracle" ]; then
     runuser -u oracle -- unzip -q -o /u01/app/db_home.zip -d "$ORACLE_HOME"
     rm -f /u01/app/db_home.zip
   fi
+  # an inventory left by an install that stopped before orainstRoot.sh (no /etc/oraInst.loc, no inventory.xml:
+  # only its logs) -- the installer wants an empty one: its logs kept aside
+  if [ ! -f /etc/oraInst.loc ] && [ -d "$INVENTORY" ] && [ ! -f "$INVENTORY/ContentsXML/inventory.xml" ] \
+     && [ -n "$(ls -A "$INVENTORY")" ]; then
+    OLD="/u01/app/oraInventory.failed-$(date +%Y%m%d-%H%M%S)"
+    mv "$INVENTORY" "$OLD"
+    install -d -o oracle -g oinstall -m 775 "$INVENTORY"
+    echo "   (an inventory of an install that did not finish: moved to $OLD)"
+  fi
   RSP=$ORACLE_BASE/em_db_install.rsp
   install -o oracle -g oinstall -m 644 "$ORACLE_HOME/install/response/db_install.rsp" "$RSP"
   # a key of the response file: its name in 19c (oracle.install...) or in 26ai (the short one), whichever is there

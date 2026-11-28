@@ -40,6 +40,8 @@ def test_em_host():
     assert '-sysPassword' not in s and '-systemPassword' not in s and '-pdbAdminPassword' not in s
     assert 'oracle-em.service' in s and 'save state' in s
     # mkswap of Oracle Linux 9 has no -q; each step of the swap again after a stop
+    # an inventory of an install that stopped (INS-32035): moved aside, never one that has homes
+    assert '[ ! -f /etc/oraInst.loc ]' in s and 'ContentsXML/inventory.xml' in s and 'oraInventory.failed-' in s
     assert 'mkswap -q' not in s and 'blkid -t TYPE=swap /swapfile' in s and 'swapon --show' in s
 
 
