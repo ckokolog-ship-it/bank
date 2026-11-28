@@ -98,7 +98,8 @@ MISSING=()
 setk() { # the key, the value: replaced where it is in the template (also a commented #KEY=), else added and said
   local k=$1 v=$2
   if grep -qE "^#?[[:space:]]*${k}[[:space:]]*=" "$RSP"; then
-    K="$k" V="$v" perl -pi -e 's/^#?\s*\Q$ENV{K}\E\s*=.*/$ENV{K}=$ENV{V}/' "$RSP"
+    # (the first line of the key only: the template has some keys more than once, as variants)
+    K="$k" V="$v" perl -pi -e 'if (!$done && s/^#?\s*\Q$ENV{K}\E\s*=.*/$ENV{K}=$ENV{V}/) { $done = 1 }' "$RSP"
   else
     printf '%s=%s\n' "$k" "$v" >> "$RSP"
     MISSING+=("$k")
